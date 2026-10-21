@@ -25,6 +25,9 @@ function saveSettings() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch { /* ignora */ }
 }
 
+const applyVolumes = () => Sound.setVolumes(settings.music, settings.sfx);
+applyVolumes();
+
 function bindSlider(id, key) {
   const input = $(id);
   const paint = () => input.style.setProperty("--fill", `${input.value * 100}%`);
@@ -34,6 +37,8 @@ function bindSlider(id, key) {
     settings[key] = Number(input.value);
     paint();
     saveSettings();
+    applyVolumes();
+    if (key === "sfx") Sound.play("navegar"); // amostra do volume dos efeitos
   });
 }
 bindSlider("#music", "music");
@@ -44,6 +49,7 @@ function setSwitch(el, on) { el.setAttribute("aria-checked", String(on)); }
 const motionSwitch = $("#reduceMotion");
 setSwitch(motionSwitch, settings.reduceMotion);
 motionSwitch.addEventListener("click", () => {
+  Sound.play("alternar");
   settings.reduceMotion = !settings.reduceMotion;
   setSwitch(motionSwitch, settings.reduceMotion);
   saveSettings();
@@ -51,6 +57,7 @@ motionSwitch.addEventListener("click", () => {
 
 const fullscreenSwitch = $("#fullscreen");
 fullscreenSwitch.addEventListener("click", () => {
+  Sound.play("alternar");
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen?.();
 });
@@ -69,6 +76,7 @@ let current = mainButtons;
 let returnFocus = mainButtons.querySelector("button");
 
 function show(screen, focusEl) {
+  silentFocus = true;
   document.querySelectorAll(".screen").forEach((s) => (s.hidden = s !== screen));
   current = screen;
   if (screen === mainButtons) {
@@ -77,12 +85,14 @@ function show(screen, focusEl) {
     hint.textContent = "Esc: voltar";
     (focusEl || screen.querySelector("input, button")).focus();
   }
+  silentFocus = false;
 }
 
 mainButtons.querySelectorAll("button").forEach((btn) => {
   btn.addEventListener("focus", () => (hint.textContent = btn.dataset.hint));
   btn.addEventListener("click", () => {
     returnFocus = btn;
+    Sound.play(btn.dataset.mode ? "iniciar" : "confirmar");
     if (btn.dataset.mode) {
       $("#playTitle").textContent = MODE_NAMES[btn.dataset.mode];
       show($("#play"));
@@ -91,7 +101,10 @@ mainButtons.querySelectorAll("button").forEach((btn) => {
     }
   });
 });
-document.querySelectorAll(".back").forEach((b) => b.addEventListener("click", () => show(mainButtons)));
+document.querySelectorAll(".back").forEach((b) => b.addEventListener("click", () => {
+  Sound.play("voltar");
+  show(mainButtons);
+}));
 
 // Mouse em cima = foco, igual ao Godot.
 document.querySelectorAll("button, input").forEach((el) =>
@@ -101,6 +114,7 @@ document.querySelectorAll("button, input").forEach((el) =>
 addEventListener("keydown", (e) => {
   const key = e.key;
   if (key === "Escape" && current !== mainButtons) {
+    Sound.play("voltar");
     show(mainButtons);
     return;
   }
@@ -118,6 +132,15 @@ addEventListener("keydown", (e) => {
 document.addEventListener("mousedown", (e) => {
   if (!e.target.closest("button, input")) e.preventDefault();
 });
+
+// ---------- Som ao navegar ----------
+// Toca quando o foco muda por ação do jogador (não no foco automático ao trocar de tela).
+let silentFocus = true;
+document.addEventListener("focusin", () => {
+  if (!silentFocus) Sound.play("navegar");
+});
+["keydown", "pointerdown"].forEach((type) =>
+  addEventListener(type, () => Sound.unlock(), { capture: true }));
 
 // ---------- Fundo alternando entre os cenários ----------
 const bgA = $("#bgA");

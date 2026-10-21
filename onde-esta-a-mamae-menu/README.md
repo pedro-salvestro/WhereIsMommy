@@ -22,6 +22,7 @@ Para usar outra porta: `PORT=3000 npm start`.
 - Modos do GDD: **História**, **Contra o Tempo** e **Modo Livre**.
 - **Opções**: volume de música, volume de efeitos, reduzir animações e tela cheia (salvas no navegador).
 - **Créditos** e **Sair**.
+- **Som**: música de fundo em loop e efeitos chiptune ao navegar, confirmar, voltar e alternar opções. A música começa no primeiro clique ou tecla (regra dos navegadores).
 - Controles: setas ou W/S para navegar, Enter ou Espaço para escolher, Esc para voltar. Também funciona com mouse.
 
 ## Arquivos
@@ -30,11 +31,12 @@ Para usar outra porta: `PORT=3000 npm start`.
 index.html   estrutura das telas
 style.css    visual (painéis de madeira, botões, sliders)
 menu.js      navegação, opções e troca de fundo
+audio.js     música e efeitos (Web Audio)
 server.js    servidor local sem dependências
-assets/      cenários, fonte e ícones
+assets/      cenários, fonte, ícones e sons (assets/audio)
 ```
 
 ## Créditos
 
 Equipe: Luiz, Flavio, Breno e Pedro · Desenvolvimento de Games, UNIFESP ICT, 2026.
-Fonte [Press Start 2P](assets/PressStart2P-OFL.txt) sob licença SIL OFL. Código sob licença [MIT](LICENSE).
+Fonte [Press Start 2P](assets/PressStart2P-OFL.txt) sob licença SIL OFL. Sons e música feitos pela equipe para o jogo. Código sob licença [MIT](LICENSE).
