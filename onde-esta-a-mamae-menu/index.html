@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Onde Está a Mamãe?</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Tela em resolução base 320×180, ampliada em números inteiros (como no Godot). -->
+  <div id="stage">
+    <img id="bgA" class="bg" src="assets/menu_bg_shopping.png" alt="">
+    <img id="bgB" class="bg" src="assets/menu_bg_shopping.png" alt="">
+    <div class="shade"></div>
+
+    <div id="ui">
+      <header class="panel title-panel">
+        <h1>Onde Está a Mamãe?</h1>
+        <p class="subtitle">Uma criança perdida no shopping</p>
+      </header>
+
+      <main class="center">
+        <nav id="mainButtons" class="screen buttons">
+          <button data-hint="Encontre a mamãe, área por área." data-mode="historia">História</button>
+          <button data-hint="Chegue até a mamãe bem rápido!" data-mode="contra-o-tempo">Contra o Tempo</button>
+          <button data-hint="Sem cronômetro: explore com calma." data-mode="livre">Modo Livre</button>
+          <button data-hint="Volume, animações e tela cheia." data-open="options">Opções</button>
+          <button data-hint="Quem fez este jogo." data-open="credits">Créditos</button>
+          <button data-hint="Até a próxima!" data-open="bye">Sair</button>
+        </nav>
+
+        <section id="options" class="screen panel options" hidden>
+          <h2>Opções</h2>
+          <label class="row"><span>Música</span><input id="music" type="range" min="0" max="1" step="0.05"></label>
+          <label class="row"><span>Efeitos</span><input id="sfx" type="range" min="0" max="1" step="0.05"></label>
+          <button id="reduceMotion" class="row toggle" role="switch" aria-checked="false"><span>Reduzir animações</span><i></i></button>
+          <button id="fullscreen" class="row toggle" role="switch" aria-checked="false"><span>Tela cheia</span><i></i></button>
+          <button class="back small">Voltar</button>
+        </section>
+
+        <section id="credits" class="screen panel credits" hidden>
+          <h2>Créditos</h2>
+          <p>Luiz - Flavio - Breno - Pedro</p>
+          <p>Desenvolvimento de Games</p>
+          <p>UNIFESP ICT - 2026</p>
+          <p>Prof. Fabio Cappabianco</p>
+          <p>Fonte: Press Start 2P (OFL)</p>
+          <button class="back small">Voltar</button>
+        </section>
+
+        <section id="play" class="screen panel credits" hidden>
+          <h2 id="playTitle">História</h2>
+          <p>Fase 1: Corredores centrais</p>
+          <p>A fase ainda está em produção.</p>
+          <button class="back small">Voltar</button>
+        </section>
+
+        <section id="bye" class="screen panel credits" hidden>
+          <h2>Até a próxima!</h2>
+          <p>A mamãe espera por você.</p>
+          <button class="back small">Voltar</button>
+        </section>
+      </main>
+
+      <footer class="footer"><span id="hint"></span></footer>
+    </div>
+  </div>
+  <script src="menu.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "onde-esta-a-mamae-menu",
+  "version": "0.1.0",
+  "description": "Menu inicial do jogo Onde Está a Mamãe? em HTML, CSS e JavaScript puro.",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}
