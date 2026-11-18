@@ -83,7 +83,7 @@ Cada esbarrão em uma pessoa ou policial custa **5 segundos**.
 1. Instale o **[Unity Hub](https://unity.com/download)** e o **Unity 6** (versão `6000.x`).
 2. Clone o repositório:
    ```bash
-   git clone <url-deste-repositorio>
+   git clone <https://github.com/pedro-salvestro/WhereIsMommy>
    ```
 3. No Hub: **Add → Add project from disk** e escolha a pasta clonada.
 4. Ao abrir, as cenas `Menu` e `Fase_Shopping` são geradas sozinhas (ou use **Mamae → Gerar Cenas**).
