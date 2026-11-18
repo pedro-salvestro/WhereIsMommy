@@ -1,0 +1,207 @@
+/* Mesmo visual do menu do Godot: madeira escura, borda laranja, texto creme e dourado. */
+@font-face {
+  font-family: "Press Start 2P";
+  src: url("assets/PressStart2P-Regular.ttf") format("truetype");
+}
+
+:root {
+  --wood: rgba(70, 42, 25, 0.94);
+  --wood-btn: rgba(92, 56, 33, 0.96);
+  --wood-focus: #8f5429;
+  --wood-dark: rgba(41, 23, 13, 0.88);
+  --rim: #c8783c;
+  --rim-btn: #995a2e;
+  --cream: #fbecd0;
+  --gold: #ffcf4a;
+  --ink: #211209;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: #120a06;
+  overflow: hidden;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  font-family: "Press Start 2P", monospace;
+  font-size: 8px;
+  line-height: 8px;
+  color: var(--cream);
+  -webkit-font-smoothing: none;
+}
+
+#stage {
+  position: relative;
+  width: 320px;
+  height: 180px;
+  overflow: hidden;
+  transform: scale(var(--scale, 4));
+  image-rendering: pixelated;
+  flex: none;
+}
+
+.bg {
+  position: absolute;
+  inset: 0;
+  width: 320px;
+  height: 180px;
+  image-rendering: pixelated;
+}
+#bgB { opacity: 0; }
+#bgB.fading { transition: opacity 1.2s linear; opacity: 1; }
+
+.shade { position: absolute; inset: 0; background: rgba(31, 15, 8, 0.42); }
+
+#ui {
+  position: absolute;
+  inset: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#ui.intro { animation: fadein 0.5s linear; }
+@keyframes fadein { from { opacity: 0; } }
+
+.panel {
+  background: var(--wood);
+  border: 2px solid var(--rim);
+  border-radius: 3px;
+  box-shadow: 0 2px 0 rgba(23, 13, 8, 0.85);
+  padding: 6px 8px;
+}
+
+.title-panel {
+  align-self: center;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+h1 {
+  font-size: 16px;
+  line-height: 16px;
+  font-weight: normal;
+  color: var(--gold);
+  text-shadow: 2px 2px 0 var(--ink);
+}
+h2 {
+  font-size: 8px;
+  font-weight: normal;
+  color: var(--gold);
+  text-align: center;
+  text-shadow: 1px 1px 0 var(--ink);
+}
+p, .subtitle, span { text-shadow: 1px 1px 0 var(--ink); }
+
+.center {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+.screen[hidden] { display: none; }
+
+.buttons {
+  width: 144px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+button {
+  font: inherit;
+  color: var(--cream);
+  cursor: pointer;
+  outline: none;
+}
+
+.buttons button, .back {
+  height: 15px;
+  padding: 3px 8px 2px;
+  background: var(--wood-btn);
+  border: 1px solid var(--rim-btn);
+  border-bottom-width: 2px;
+  border-radius: 2px;
+  text-shadow: none;
+}
+.buttons button:focus, .back:focus {
+  background: var(--wood-focus);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+.buttons button:active, .back:active {
+  background: #40260f;
+  border-width: 2px 1px 1px;
+  padding-top: 4px;
+  padding-bottom: 1px;
+}
+.back { align-self: center; width: 80px; }
+
+.options {
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.credits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 8px;
+  background: none;
+  border: 0;
+  text-align: left;
+}
+.row:focus-within span, .toggle:focus span { color: var(--gold); }
+
+/* Slider no estilo do Godot: trilho escuro, preenchimento dourado. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 84px;
+  height: 4px;
+  background: linear-gradient(var(--gold), var(--gold)) 0 / var(--fill, 80%) 100% no-repeat, #29170d;
+  outline: 1px solid var(--rim-btn);
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 4px;
+  height: 8px;
+  background: url("assets/slider_grabber.png");
+  border: 0;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 4px;
+  height: 8px;
+  background: url("assets/slider_grabber.png");
+  border: 0;
+  border-radius: 0;
+}
+
+.toggle i {
+  width: 14px;
+  height: 8px;
+  background: url("assets/toggle_off.png");
+  image-rendering: pixelated;
+}
+.toggle[aria-checked="true"] i { background-image: url("assets/toggle_on.png"); }
+
+.footer {
+  background: var(--wood-dark);
+  border: 1px solid var(--rim);
+  border-radius: 2px;
+  padding: 4px 6px 3px;
+  text-align: center;
+  height: 17px;
+}
