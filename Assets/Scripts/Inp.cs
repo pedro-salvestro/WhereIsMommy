@@ -3,7 +3,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 #endif
 
-public enum K { Up, Down, Left, Right, Confirm, Interact, Pause, Restart, Menu }
+public enum K { Up, Down, Left, Right, Confirm, Interact, Pause, Restart, Menu, Map, Enter }
 
 // Entrada unificada: funciona com o Input System novo ou o antigo.
 public static class Inp
@@ -39,6 +39,8 @@ public static class Inp
             case K.Pause: return k.escapeKey.wasPressedThisFrame;
             case K.Restart: return k.rKey.wasPressedThisFrame;
             case K.Menu: return k.mKey.wasPressedThisFrame;
+            case K.Map: return k.tabKey.wasPressedThisFrame;
+            case K.Enter: return k.enterKey.wasPressedThisFrame || k.numpadEnterKey.wasPressedThisFrame;
         }
         return false;
 #else
@@ -53,6 +55,8 @@ public static class Inp
             case K.Pause: return Input.GetKeyDown(KeyCode.Escape);
             case K.Restart: return Input.GetKeyDown(KeyCode.R);
             case K.Menu: return Input.GetKeyDown(KeyCode.M);
+            case K.Map: return Input.GetKeyDown(KeyCode.Tab);
+            case K.Enter: return Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
         }
         return false;
 #endif

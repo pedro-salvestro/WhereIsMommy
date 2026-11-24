@@ -20,7 +20,12 @@ public class SpriteImportSettings : AssetPostprocessor
         t.spritePixelsPerUnit = character ? 55 : 100;
         t.filterMode = character ? FilterMode.Point : FilterMode.Bilinear;
         t.textureCompression = character ? TextureImporterCompression.Uncompressed : TextureImporterCompression.Compressed;
+        // os personagens precisam ser legiveis para gerar as "mamaes parecidas" com outra roupa
+        t.isReadable = character;
     }
+
+    // mudar este numero faz o Unity reimportar as imagens com as regras acima
+    public override uint GetVersion() => 2;
 }
 
 [InitializeOnLoad]
@@ -35,6 +40,18 @@ public static class ProjectSetup
         {
             if (!File.Exists(MenuPath) || !File.Exists(LevelPath)) GenerateScenes();
         };
+    }
+
+    [MenuItem("Mamae/Apagar Recordes")]
+    public static void ClearRecords()
+    {
+        foreach (GameMode m in System.Enum.GetValues(typeof(GameMode)))
+        {
+            PlayerPrefs.DeleteKey("recorde_" + m);
+            foreach (Dificuldade d in System.Enum.GetValues(typeof(Dificuldade))) PlayerPrefs.DeleteKey(GameSettings.RecordKey(m, d));
+        }
+        PlayerPrefs.Save();
+        Debug.Log("Recordes apagados.");
     }
 
     [MenuItem("Mamae/Gerar Cenas")]
