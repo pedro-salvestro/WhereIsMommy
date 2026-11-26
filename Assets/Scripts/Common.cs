@@ -37,10 +37,10 @@ public static class GameSettings
     public static void NewRun() { Level = 0; TotalScore = 0; Coins = 0; }
 
     public static string ModeName(GameMode m) =>
-        m == GameMode.Historia ? "HISTORIA" : m == GameMode.ContraOTempo ? "CONTRA O TEMPO" : "LIVRE";
+        m == GameMode.Historia ? "HISTÓRIA" : m == GameMode.ContraOTempo ? "CONTRA O TEMPO" : "LIVRE";
 
     public static string DifName(Dificuldade d) =>
-        d == Dificuldade.Facil ? "FACIL" : d == Dificuldade.Normal ? "NORMAL" : d == Dificuldade.Dificil ? "DIFICIL" : "EXTRA HARD";
+        d == Dificuldade.Facil ? "FÁCIL" : d == Dificuldade.Normal ? "NORMAL" : d == Dificuldade.Dificil ? "DIFÍCIL" : "EXTRA HARD";
 
     // um recorde para cada modo e dificuldade
     public static string RecordKey(GameMode m, Dificuldade d) => "recorde_" + m + "_" + d;
@@ -58,7 +58,7 @@ public static class GameSettings
 // A dificuldade escolhida no menu muda o tempo, quantas mulheres parecidas com a mamae aparecem e a ordem das dicas.
 public struct Difficulty
 {
-    public int Guards, Lookalikes, Coins, Totems, Crowd, BigCops;
+    public int Guards, Lookalikes, Coins, Totems, Crowd, BigCops, Kidnappers;
     public float GuardSpeed, CameraSize, Seconds, MomMovesEvery;
     public bool Kidnapper, Events;
     public Dificuldade Dif;
@@ -93,6 +93,8 @@ public struct Difficulty
             Crowd = new[] { 12, 16, 20, 26, 32, 40 }[level] + (easy ? -4 : 0),
             BigCops = new[] { 0, 1, 1, 1, 2, 2 }[level] + 2 + new[] { 0, 0, 1, 2 }[di],   // +2 em toda fase, mais no dificil
             Kidnapper = level >= 1,
+            // mulheres de preto: 2 nas fases 2 e 3, 3 nas fases 4 a 6 (uma a menos no Facil, uma a mais no Dificil e no Extra Hard)
+            Kidnappers = level < 1 ? 0 : Mathf.Max(1, (level <= 2 ? 2 : 3) + (easy ? -1 : di >= 2 ? 1 : 0)),
             Events = !easy,   // apagao (lugares fechados) e chuva (lugares abertos)
             GuardSpeed = new[] { 1.3f, 1.4f, 1.5f, 1.6f, 1.7f, 1.7f }[level],
             CameraSize = new[] { 3.4f, 3.3f, 3.2f, 3.1f, 3.0f, 3.0f }[level],
@@ -111,7 +113,8 @@ public struct Difficulty
 public class AudioManager : MonoBehaviour
 {
     static AudioManager inst;
-    AudioSource music, sfx;
+    AudioSource music, sfx, ambient;
+    static readonly Dictionary<string, AudioClip> clips = new Dictionary<string, AudioClip>();
 
     public static AudioManager Get()
     {
@@ -123,15 +126,36 @@ public class AudioManager : MonoBehaviour
             inst.music = go.AddComponent<AudioSource>();
             inst.music.loop = true;
             inst.sfx = go.AddComponent<AudioSource>();
+            inst.ambient = go.AddComponent<AudioSource>();
+            inst.ambient.loop = true;
+            inst.ambient.volume = 0.45f;
         }
         return inst;
     }
 
-    public static void Sfx(string name)
+    static AudioClip Clip(string name)
     {
-        var c = Resources.Load<AudioClip>("Audio/" + name);
-        if (c != null) Get().sfx.PlayOneShot(c);
+        if (!clips.TryGetValue(name, out var c)) { c = Resources.Load<AudioClip>("Audio/" + name); clips[name] = c; }
+        return c;
     }
+
+    public static void Sfx(string name, float volume = 1f)
+    {
+        var c = Clip(name);
+        if (c != null) Get().sfx.PlayOneShot(c, volume);
+    }
+
+    // som de fundo de cada lugar (gente conversando, passarinhos, agua...), em loop por baixo da musica
+    public static void Ambient(string name)
+    {
+        var a = Get();
+        var c = Clip(name);
+        if (a.ambient.clip == c && a.ambient.isPlaying) return;
+        a.ambient.clip = c;
+        if (c != null) a.ambient.Play(); else a.ambient.Stop();
+    }
+
+    public static void StopAmbient() { Get().ambient.Stop(); }
 
     public static void Music(string name)
     {
@@ -154,12 +178,23 @@ public class AudioManager : MonoBehaviour
 }
 
 // Escolhe entre os 8 sprites (north, north-east, ...) pelo vetor de direcao.
+// Quando o personagem anda, troca entre 4 quadros de passo (gerados a partir do desenho parado:
+// uma perna sobe, o corpo sobe 1 pixel, depois a outra perna).
 [RequireComponent(typeof(SpriteRenderer))]
 public class DirectionalSprite : MonoBehaviour
 {
     static readonly string[] Names = { "east", "north-east", "north", "north-west", "west", "south-west", "south", "south-east" };
+    static readonly Dictionary<Sprite, Sprite[]> walkCache = new Dictionary<Sprite, Sprite[]>();
     Sprite[] sprites;
     SpriteRenderer sr;
+    int dirIdx = 6, frame;
+    float animT;
+    Vector3 lastPos;
+    bool hasLast;
+
+    public float stepRate = 8f;               // quadros por segundo andando
+    public System.Action OnStep;              // chamado quando um pe toca o chao (som de passo)
+    public bool Walking { get; private set; }
 
     public void Load(string folder)
     {
@@ -189,8 +224,96 @@ public class DirectionalSprite : MonoBehaviour
         float ang = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg;
         int idx = Mathf.RoundToInt(ang / 45f);
         if (idx < 0) idx += 8;
-        sr.sprite = sprites[idx % 8];
+        dirIdx = idx % 8;
+        Show();
     }
+
+    void Show()
+    {
+        if (sprites == null || sr == null) return;
+        var baseSprite = sprites[dirIdx];
+        if (baseSprite == null) return;
+        if (frame == 0 || frame == 2) { sr.sprite = baseSprite; return; }
+        var f = WalkFrames(baseSprite);
+        sr.sprite = f != null ? f[frame == 1 ? 0 : 1] : baseSprite;
+    }
+
+    void LateUpdate()
+    {
+        if (sprites == null) return;
+        var p = transform.position;
+        float dt = Time.deltaTime;
+        if (!hasLast || dt <= 0f) { lastPos = p; hasLast = true; return; }
+        float speed = ((Vector2)(p - lastPos)).magnitude / dt;
+        lastPos = p;
+        bool walking = speed > 0.25f && speed < 40f;   // muito rapido = foi teletransportado
+        Walking = walking;
+        int old = frame;
+        if (walking)
+        {
+            animT += dt * stepRate * Mathf.Clamp(speed / 2.5f, 0.7f, 1.6f);
+            frame = Mathf.FloorToInt(animT) % 4;
+        }
+        else { animT = 0f; frame = 0; }
+        if (frame != old)
+        {
+            Show();
+            if (walking && (frame == 1 || frame == 3)) OnStep?.Invoke();
+        }
+    }
+
+    // dois quadros de passo para um desenho: [perna esquerda levantada, perna direita levantada]
+    static Sprite[] WalkFrames(Sprite s)
+    {
+        if (walkCache.TryGetValue(s, out var done)) return done;
+        Sprite[] outp = null;
+        try
+        {
+            var tr = s.textureRect;
+            int x0 = Mathf.FloorToInt(tr.x), y0 = Mathf.FloorToInt(tr.y);
+            int w = Mathf.RoundToInt(tr.width), h = Mathf.RoundToInt(tr.height);
+            var src = s.texture.GetPixels(x0, y0, w, h);
+            int bot = h, top = -1, left = w, right = -1;
+            for (int k = 0; k < src.Length; k++)
+                if (src[k].a > 0.5f)
+                {
+                    int x = k % w, y = k / w;
+                    if (y < bot) bot = y; if (y > top) top = y;
+                    if (x < left) left = x; if (x > right) right = x;
+                }
+            if (top > bot)
+            {
+                int legTop = bot + Mathf.Max(3, Mathf.RoundToInt((top - bot) * 0.2f));
+                float cx = (left + right) / 2f;
+                outp = new Sprite[2];
+                for (int side = 0; side < 2; side++)
+                {
+                    var px = new Color[src.Length];
+                    for (int y = 0; y < h; y++)
+                        for (int x = 0; x < w; x++)
+                        {
+                            Color c;
+                            bool lifted = (side == 0) ? x < cx : x >= cx;
+                            if (y > legTop) c = Get(src, w, h, x, y - 1);          // corpo sobe 1 px
+                            else if (lifted) c = Get(src, w, h, x, y - 2);         // perna levantada
+                            else c = src[y * w + x];                               // perna de apoio fica no chao
+                            if (y == legTop + 1 && c.a < 0.5f) c = src[y * w + x]; // nao abre buraco na cintura
+                            px[y * w + x] = c;
+                        }
+                    var tex = new Texture2D(w, h, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp };
+                    tex.SetPixels(px);
+                    tex.Apply();
+                    Vector2 piv = s.pivot - s.textureRectOffset;
+                    outp[side] = Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(Mathf.Clamp01(piv.x / w), Mathf.Clamp01(piv.y / h)), s.pixelsPerUnit);
+                }
+            }
+        }
+        catch { outp = null; }   // desenho nao legivel: fica so o quadro parado
+        walkCache[s] = outp;
+        return outp;
+    }
+
+    static Color Get(Color[] px, int w, int h, int x, int y) => (x < 0 || y < 0 || x >= w || y >= h) ? Color.clear : px[y * w + x];
 }
 
 // Sprites simples desenhados por codigo (nao precisam de arquivo de arte).
@@ -260,6 +383,18 @@ public static class GenSprites
     }, 20, new Vector2(0.5f, 0.05f));
 
     public static Sprite White => white ??= Make(4, 4, (x, y) => Color.white, 4, new Vector2(0.5f, 0.5f));
+
+    // coracao (final da fase: a mamae abraca a crianca)
+    static readonly string[] HeartRows = { ".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X..." };
+    static Sprite heart;
+    public static Sprite Heart => heart ??= Make(9, 8, (x, y) =>
+    {
+        int ty = 6 - y, tx = x - 1;
+        bool In(int a, int b) => b >= 0 && b < HeartRows.Length && a >= 0 && a < 7 && HeartRows[b][a] == 'X';
+        if (In(tx, ty)) return (tx == 1 && ty == 1) ? new Color(1f, 0.75f, 0.8f) : new Color(0.95f, 0.2f, 0.35f);
+        if (In(tx - 1, ty) || In(tx + 1, ty) || In(tx, ty - 1) || In(tx, ty + 1)) return new Color(0.35f, 0.05f, 0.1f);
+        return Color.clear;
+    }, 20, new Vector2(0.5f, 0.5f));
 
     // seta do megafone (aponta para a direita; o jogo gira)
     static Sprite arrow, fog;

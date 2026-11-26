@@ -8,7 +8,7 @@ using UnityEngine.UI;
 // e controla o fluxo: apresentacao da mamae, tempo, dicas, lojinha, apagao, chuva, vitoria, derrota, pausa e proxima fase.
 public class LevelController : MonoBehaviour
 {
-    enum State { Intro, Playing, Shop, Won, Lost, Paused, Kidnap }
+    enum State { Intro, Playing, Shop, Won, Lost, Paused, Kidnap, Hug }
 
     float WorldW, WorldH;
     const float Cell = 0.25f;          // grade usada para saber onde da para andar
@@ -34,7 +34,12 @@ public class LevelController : MonoBehaviour
 
     Camera cam;
     float camSize;
-    Transform player, mom, shop, kidnapper;
+    Transform player, mom, shop, kidnapper;   // kidnapper: a mulher de preto que pegou a crianca
+    readonly List<Transform> kidnappers = new List<Transform>();
+    readonly List<GameObject> alerts = new List<GameObject>();
+    readonly List<bool> alerted = new List<bool>();
+    const float AlertDistance = 2.6f;   // perto assim, aparece o "!" vermelho em cima da mulher de preto
+    float shakeUntil, shakeAmp;
     PlayerController pc;
     Sprite[] momSprites;
     readonly List<Transform> lookalikes = new List<Transform>();
@@ -113,6 +118,7 @@ public class LevelController : MonoBehaviour
         PlanEvents();
         AudioManager.StopMusic();
         AudioManager.Music("musica_fase");
+        AudioManager.Ambient("amb_" + new[] { "shopping", "mercado", "parque", "aquatico", "diversoes", "gelo" }[levelIndex]);
         ShowIntro();
     }
 
@@ -187,6 +193,7 @@ public class LevelController : MonoBehaviour
         circle.offset = new Vector2(0, -FeetOffset);
         pc = p.AddComponent<PlayerController>();
         pc.ice = def.Ice;
+        p.GetComponent<DirectionalSprite>().OnStep = () => { if (state == State.Playing) AudioManager.Sfx("passo", 0.35f); };
         Outline.Add(p, Gold, 0.045f);
         var ring = new GameObject("Anel").AddComponent<SpriteRenderer>();
         ring.sprite = GenSprites.Ring;
@@ -194,7 +201,7 @@ public class LevelController : MonoBehaviour
         ring.transform.localPosition = new Vector3(0, -0.38f, 0);
         ring.sortingOrder = 3;
         player = p.transform;
-        youMarker = MakeWorldText(p.transform, "VOCE", new Vector3(0, 0.75f, 0), Gold);
+        youMarker = MakeWorldText(p.transform, "VOCÊ", new Vector3(0, 0.75f, 0), Gold);
         bool skating = def.SkateLoop != null && def.SkateLoop.Length > 2;
 
         // Mamae: sem contorno (so aparece "APERTE E" quando a crianca chega perto)
@@ -217,16 +224,21 @@ public class LevelController : MonoBehaviour
         }
 
         // Sequestradora: corpo um pouco maior e roupa toda preta. Falar com ela e perder o jogo.
-        if (dif.Kidnapper)
+        for (int i = 0; i < dif.Kidnappers; i++)
         {
-            var c = RandomFarCell(6f, 3f, lookalikes);
+            var c = RandomFarCell(6f, 4f, kidnappers);
             var go = MakeCharacter("Sequestradora", "Mae", FeetToPos(CellCenter(c)), CharOrder, 1.3f);
             var ks = DressSafe(() => Recolor.Kidnapper());
             if (ks != null) go.GetComponent<DirectionalSprite>().Use(ks);
             else go.GetComponent<SpriteRenderer>().color = new Color(0.3f, 0.3f, 0.3f);
             AddWalker(go, RandomRoute(c), 0.7f, false, true);
-            kidnapper = go.transform;
+            kidnappers.Add(go.transform);
+            var al = MakeWorldText(go.transform, "!", new Vector3(0, 1.05f, 0), new Color(1f, 0.2f, 0.2f), 1.6f);
+            al.SetActive(false);
+            alerts.Add(al);
+            alerted.Add(false);
         }
+        if (kidnappers.Count > 0) kidnapper = kidnappers[0];
 
         // Multidao estilo "Onde esta o Wally": mulheres, homens e criancas com roupas variadas
         BuildCrowd(skating);
@@ -713,7 +725,7 @@ public class LevelController : MonoBehaviour
         var card = UIKit.Panel(t, new Color(0, 0, 0, 0.65f), new Vector2(0f, 0f), new Vector2(120, 70), new Vector2(230, 130));
         UIKit.Picture(card.transform, momSprites != null ? momSprites[6] : Resources.Load<Sprite>("Art/Mae/south"),
             new Vector2(0f, 0.5f), new Vector2(45, 0), new Vector2(80, 110)).preserveAspect = true;
-        UIKit.Label(card.transform, "MAMAE:\n" + def.Outfit.Replace(" E ", "\nE "), 9, Pink, new Vector2(1f, 0.5f), new Vector2(-68, 0), new Vector2(130, 110));
+        UIKit.Label(card.transform, "MAMÃE:\n" + def.Outfit.Replace(" E ", "\nE "), 9, Pink, new Vector2(1f, 0.5f), new Vector2(-68, 0), new Vector2(130, 110));
 
         // mapa grande (TAB): mostra os nomes dos lugares (letra maior), mas nao a mamae
         bigMapRoot = UIKit.Panel(t, new Color(0, 0, 0, 0.85f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(2400, 1400)).gameObject;
@@ -732,7 +744,7 @@ public class LevelController : MonoBehaviour
         foreach (var tt in totems) PlaceOn(bigMap, Dot(bigMap, new Color(0.2f, 0.7f, 1f), 12), tt.t.position);
         PlaceOn(bigMap, Dot(bigMap, ShopGreen, 14), shop.position);
         bigPlayer = Dot(bigMap, Gold, 16);
-        UIKit.Label(bigMapRoot.transform, "AMARELO: VOCE    AZUL: TOTEM DE DICA    VERDE: LOJINHA        TAB: FECHAR", 10, Cream,
+        UIKit.Label(bigMapRoot.transform, "AMARELO: VOCÊ    AZUL: TOTEM DE DICA    VERDE: LOJINHA        TAB: FECHAR", 10, Cream,
             new Vector2(0.5f, 0.5f), new Vector2(0, 14 - bs.y / 2f - 24f), new Vector2(1200, 24));
         bigMapRoot.SetActive(false);
 
@@ -864,40 +876,39 @@ public class LevelController : MonoBehaviour
         // no modo historia, os avisos aparecem so na fase 1; depois so a roupa nova da mamae
         if (mode == GameMode.Historia && levelIndex > 0)
         {
-            UIKit.Label(t, "A MAMAE AGORA ESTA COM OUTRA ROUPA:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(0, 170), new Vector2(1000, 30));
+            UIKit.Label(t, "A MAMÃE AGORA ESTÁ COM OUTRA ROUPA:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(0, 170), new Vector2(1000, 30));
             UIKit.Picture(t, momPic, new Vector2(0.5f, 0.5f), new Vector2(0, 30), new Vector2(240, 240)).preserveAspect = true;
             UIKit.Label(t, def.Outfit, 14, Cream, new Vector2(0.5f, 0.5f), new Vector2(0, -115), new Vector2(1000, 30));
-            UIKit.Label(t, "ENTER: COMECAR", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 55), new Vector2(1240, 40));
+            UIKit.Label(t, "ENTER: COMEÇAR", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 55), new Vector2(1240, 40));
             return;
         }
 
         UIKit.Label(t, def.Story, 12, Cream, new Vector2(0.5f, 1f), new Vector2(0, -122), new Vector2(1240, 60));
-        UIKit.Label(t, "ESTA E A SUA MAMAE:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(-280, 160), new Vector2(500, 30));
+        UIKit.Label(t, "ESTA É A SUA MAMÃE:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(-280, 160), new Vector2(500, 30));
         UIKit.Picture(t, momPic, new Vector2(0.5f, 0.5f), new Vector2(-280, 60), new Vector2(170, 170)).preserveAspect = true;
         UIKit.Label(t, def.Outfit, 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(-280, -36), new Vector2(500, 30));
 
-        UIKit.Label(t, "VOCE E ESTA CRIANCA:", 15, Gold, new Vector2(0.5f, 0.5f), new Vector2(280, 160), new Vector2(500, 30));
+        UIKit.Label(t, "VOCÊ É ESTA CRIANÇA:", 15, Gold, new Vector2(0.5f, 0.5f), new Vector2(280, 160), new Vector2(500, 30));
         UIKit.Picture(t, Resources.Load<Sprite>("Art/Crianca/south"), new Vector2(0.5f, 0.5f), new Vector2(280, 60), new Vector2(170, 170)).preserveAspect = true;
         UIKit.Label(t, "COM CONTORNO AMARELO", 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(280, -36), new Vector2(500, 30));
 
         bool story = mode == GameMode.Historia;
         var tips = new List<string>();
-        tips.Add("CUIDADO: MULHERES COM ROUPA PARECIDA COM A DA MAMAE! OLHE BEM AS CORES." +
+        tips.Add("CUIDADO: MULHERES COM ROUPA PARECIDA COM A DA MAMÃE! OLHE BEM AS CORES." +
             (mode == GameMode.Livre ? "" : " ERRAR TIRA " + Difficulty.WrongMomPenalty + "s"));
-        if (dif.Kidnapper || story) tips.Add("MULHER MAIOR TODA DE PRETO" + (story ? " (A PARTIR DA FASE 2)" : "") + ": E UMA SEQUESTRADORA! FALAR COM ELA = PERDER");
-        if (dif.BigCops > 0 || story) tips.Add("POLICIAL GRANDAO DE BIGODE: SE TE PEGAR, TE LEVA PARA LONGE E VOCE FICA PRESO " + Difficulty.CaughtSeconds + "s");
-        tips.Add("SEGURANCAS: DA PARA PASSAR POR ELES, MAS ESBARRAR DEIXA VOCE LENTO POR " + Difficulty.HitSlowSeconds + "s");
-        if (dif.Totems > 1) tips.Add("TOTEM AZUL (i): CADA UM DA UMA DICA DIFERENTE DO QUE A MAMAE ESTAVA FAZENDO");
-        else if (dif.Totems == 1) tips.Add("SO TEM 1 TOTEM AZUL (i) DE DICA NO MAPA: ACHE ELE!");
-        else if (levelIndex == Levels.Count - 1) tips.Add("AQUI NAO TEM DICAS: TODO MUNDO PATINA RAPIDO, ALCANCE A MAMAE!");
-        else tips.Add("NESTA DIFICULDADE NAO TEM TOTEM DE DICA: OLHE BEM A ROUPA DA MAMAE!");
-        if (dif.Coins > 0) tips.Add("MOEDAS SAO POUCAS: GASTE BEM NA LOJINHA ($)");
+        if (dif.BigCops > 0 || story) tips.Add("POLICIAL GRANDÃO DE BIGODE: SE TE PEGAR, TE LEVA PARA LONGE E VOCÊ FICA PRESO " + Difficulty.CaughtSeconds + "s");
+        tips.Add("SEGURANÇAS: DÁ PARA PASSAR POR ELES, MAS ESBARRAR DEIXA VOCÊ LENTO POR " + Difficulty.HitSlowSeconds + "s");
+        if (dif.Totems > 1) tips.Add("TOTEM AZUL (i): CADA UM DA UMA DICA DIFERENTE DO QUE A MAMÃE ESTAVA FAZENDO");
+        else if (dif.Totems == 1) tips.Add("SÓ TEM 1 TOTEM AZUL (i) DE DICA NO MAPA: ACHE ELE!");
+        else if (levelIndex == Levels.Count - 1) tips.Add("AQUI NÃO TEM DICAS: TODO MUNDO PATINA RÁPIDO, ALCANCE A MAMÃE!");
+        else tips.Add("NESTA DIFICULDADE NÃO TEM TOTEM DE DICA: OLHE BEM A ROUPA DA MAMÃE!");
+        if (dif.Coins > 0) tips.Add("MOEDAS SÃO POUCAS: GASTE BEM NA LOJINHA ($)");
         if (dif.Events) tips.Add("A LUZ PODE ACABAR (USE A LANTERNA) E PODE CHOVER (USE O GUARDA-CHUVA)");
-        if (dif.Dark) tips.Add("EXTRA HARD: ESTA TUDO ESCURO, VOCE SO ENXERGA EM VOLTA DE VOCE");
-        if (dif.MomMovesEvery > 0) tips.Add("A MAMAE MUDA DE LUGAR A CADA " + dif.MomMovesEvery + "s!");
+        if (dif.Dark) tips.Add("EXTRA HARD: ESTÁ TUDO ESCURO, VOCÊ SÓ ENXERGA EM VOLTA DE VOCÊ");
+        if (dif.MomMovesEvery > 0) tips.Add("A MAMÃE MUDA DE LUGAR A CADA " + dif.MomMovesEvery + "s!");
         if (mode != GameMode.Livre) tips.Add("TEMPO: " + dif.Seconds + "s");
         UIKit.Label(t, string.Join("\n", tips), 10, Cream, new Vector2(0.5f, 0f), new Vector2(0, 190), new Vector2(1240, 220));
-        UIKit.Label(t, "ENTER: COMECAR    WASD/SETAS: ANDAR    E: FALAR    TAB: MAPA    ESC: MENU", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 50), new Vector2(1240, 40));
+        UIKit.Label(t, "ENTER: COMEÇAR    WASD/SETAS: ANDAR    E: FALAR    TAB: MAPA    ESC: MENU", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 50), new Vector2(1240, 40));
     }
 
     void StartPlaying()
@@ -931,7 +942,8 @@ public class LevelController : MonoBehaviour
         hits++;
         pc.Slow(Difficulty.HitSlowSeconds, Difficulty.HitSlowFactor);
         AudioManager.Sfx("esbarrao");
-        ShowBanner("ESBARRAO! VOCE FICOU LENTO", 1.2f);
+        Shake(0.35f, 0.12f);
+        ShowBanner("ESBARRÃO! VOCÊ FICOU LENTO", 1.2f);
     }
 
     // o policial grandao pegou a crianca: leva para longe e ela fica presa uns segundos
@@ -955,7 +967,8 @@ public class LevelController : MonoBehaviour
         cop.Carry(to + Vector2.right * 0.75f, Difficulty.CaughtSeconds + 0.3f);
         youMarkerUntil = Time.time + Difficulty.CaughtSeconds + 2f;
         AudioManager.Sfx("esbarrao");
-        ShowBanner("O POLICIAL GRANDAO TE LEVOU PARA OUTRO LUGAR!\nVOCE FICA PRESO POR " + Difficulty.CaughtSeconds + "s", Difficulty.CaughtSeconds);
+        Shake(0.5f, 0.2f);
+        ShowBanner("O POLICIAL GRANDÃO TE LEVOU PARA OUTRO LUGAR!\nVOCÊ FICA PRESO POR " + Difficulty.CaughtSeconds + "s", Difficulty.CaughtSeconds);
     }
 
     // o que a mamae estava fazendo, a partir dos lugares mais perto dela
@@ -967,10 +980,10 @@ public class LevelController : MonoBehaviour
         order.Sort((a, b) => Vector2.Distance(def.PlacePos[a], m).CompareTo(Vector2.Distance(def.PlacePos[b], m)));
         string Act(int k) => def.PlaceActs[order[Mathf.Clamp(k, 0, order.Count - 1)]];
         int far = order.Count - 1 - hintSeed % Mathf.Max(1, order.Count / 2);
-        string a = "A MAMAE ESTAVA " + Act(0);
-        string b = "PERTO DA MAMAE TINHA GENTE " + Act(1);
-        string c = "DE ONDE A MAMAE ESTAVA DAVA PARA VER GENTE " + Act(2);
-        string d = "A MAMAE NAO ESTAVA " + Act(far);
+        string a = "A MAMÃE ESTAVA " + Act(0);
+        string b = "PERTO DA MAMÃE TINHA GENTE " + Act(1);
+        string c = "DE ONDE A MAMÃE ESTAVA DAVA PARA VER GENTE " + Act(2);
+        string d = "A MAMÃE NÃO ESTAVA " + Act(far);
         switch (dif.Dif)
         {
             case Dificuldade.Facil: return new List<string> { a, b, c, d };
@@ -993,7 +1006,8 @@ public class LevelController : MonoBehaviour
     {
         Vector2 pf = Feet(player);
         if (Vector2.Distance(Feet(mom), pf) < TalkDistance) { FoundMom(); return; }
-        if (kidnapper != null && Vector2.Distance(Feet(kidnapper), pf) < TalkDistance + 0.15f) { Kidnapped(); return; }
+        foreach (var k in kidnappers)
+            if (Vector2.Distance(Feet(k), pf) < TalkDistance + 0.15f) { kidnapper = k; Kidnapped(); return; }
         if (Vector2.Distance(shop.position, pf) < TalkDistance + 0.2f) { OpenShop(); return; }
         foreach (var l in lookalikes)
             if (Vector2.Distance(Feet(l), pf) < TalkDistance)
@@ -1006,9 +1020,9 @@ public class LevelController : MonoBehaviour
                 if (mode != GameMode.Livre)
                 {
                     timeLeft -= Difficulty.WrongMomPenalty;
-                    ShowBanner("ESSA NAO E A MAMAE! -" + Difficulty.WrongMomPenalty + "s\nA SUA TEM " + def.Outfit, 2.2f);
+                    ShowBanner("ESSA NÃO É A MAMÃE! -" + Difficulty.WrongMomPenalty + "s\nA SUA TEM " + def.Outfit, 2.2f);
                 }
-                else ShowBanner("ESSA NAO E A MAMAE! A SUA TEM " + def.Outfit, 2f);
+                else ShowBanner("ESSA NÃO É A MAMÃE! A SUA TEM " + def.Outfit, 2f);
                 return;
             }
         foreach (var tt in totems)
@@ -1027,28 +1041,28 @@ public class LevelController : MonoBehaviour
     {
         shopItems = new List<ShopItem>
         {
-            new ShopItem { name = "ESCUDO", desc = "OS 2 PROXIMOS ESBARROES NAO ATRAPALHAM (VALE CONTRA O POLICIAL GRANDAO)", price = 8,
+            new ShopItem { name = "ESCUDO", desc = "OS 2 PRÓXIMOS ESBARRÕES NÃO ATRAPALHAM (VALE CONTRA O POLICIAL GRANDÃO)", price = 8,
                 owned = () => boughtShield, buy = () => { boughtShield = true; shields += 2; } },
-            new ShopItem { name = "TENIS", desc = "ANDA 30% MAIS RAPIDO", price = 10,
+            new ShopItem { name = "TÊNIS", desc = "ANDA 30% MAIS RÁPIDO", price = 10,
                 owned = () => boughtShoes, buy = () => { boughtShoes = true; pc.speedBonus = 1.3f; } },
-            new ShopItem { name = "OCULOS", desc = "ENXERGA UM POUCO MAIS LONGE (A CAMERA ABRE)", price = 8,
+            new ShopItem { name = "ÓCULOS", desc = "ENXERGA UM POUCO MAIS LONGE (A CÂMERA ABRE)", price = 8,
                 owned = () => boughtGlasses, buy = () => { boughtGlasses = true; camSize += 0.8f; } },
         };
         if (mode != GameMode.Livre)
-            shopItems.Add(new ShopItem { name = "RELOGIO", desc = "+15 SEGUNDOS", price = 10,
+            shopItems.Add(new ShopItem { name = "RELÓGIO", desc = "+15 SEGUNDOS", price = 10,
                 owned = () => boughtClock, buy = () => { boughtClock = true; timeLeft += 15f; } });
         if (dif.Totems > 0)
-            shopItems.Add(new ShopItem { name = "DICA", desc = "MAIS UMA DICA DO QUE A MAMAE ESTAVA FAZENDO", price = 6,
+            shopItems.Add(new ShopItem { name = "DICA", desc = "MAIS UMA DICA DO QUE A MAMÃE ESTAVA FAZENDO", price = 6,
                 owned = () => boughtHint, buy = () => { boughtHint = true; GiveHint(); } });
         if (dif.Dark || HasBlackout)
             shopItems.Add(new ShopItem { name = "LANTERNA", desc = "ENXERGA MAIS LONGE NO ESCURO" + (HasBlackout ? " (QUANDO A LUZ ACABAR)" : ""), price = 7,
                 owned = () => boughtLamp, buy = () => { boughtLamp = true; } });
         if (HasRain)
-            shopItems.Add(new ShopItem { name = "GUARDA-CHUVA", desc = "QUANDO CHOVER, A TELA NAO EMBACA", price = 5,
+            shopItems.Add(new ShopItem { name = "GUARDA-CHUVA", desc = "QUANDO CHOVER, A TELA NÃO EMBAÇA", price = 5,
                 owned = () => boughtUmbrella, buy = () => { boughtUmbrella = true; } });
-        shopItems.Add(new ShopItem { name = "DISFARCE", desc = "OS POLICIAIS E SEGURANCAS TE IGNORAM POR 15s", price = 12,
+        shopItems.Add(new ShopItem { name = "DISFARCE", desc = "OS POLICIAIS E SEGURANÇAS TE IGNORAM POR 15s", price = 12,
             owned = () => boughtDisguise, buy = () => { boughtDisguise = true; disguiseUntil = Time.time + 15f; } });
-        shopItems.Add(new ShopItem { name = "MEGAFONE", desc = "A MAMAE RESPONDE E UMA SETA APONTA PARA ELA POR 4s", price = 15,
+        shopItems.Add(new ShopItem { name = "MEGAFONE", desc = "A MAMÃE RESPONDE E UMA SETA APONTA PARA ELA POR 4s", price = 15,
             owned = () => boughtMegaphone, buy = () => { boughtMegaphone = true; arrowUntil = Time.time + 4f; } });
     }
 
@@ -1070,7 +1084,7 @@ public class LevelController : MonoBehaviour
         Time.timeScale = 1f;
         AudioManager.Sfx("voltar");
         // o megafone so "grita" quando a crianca sai da lojinha
-        if (arrowUntil > Time.time) ShowBanner("MAMAE: \"FILHO, ESTOU AQUI!\"\nSIGA A SETA!", 3f);
+        if (arrowUntil > Time.time) ShowBanner("MAMÃE: \"FILHO, ESTOU AQUI!\"\nSIGA A SETA!", 3f);
     }
 
     void RefreshShop(string msg)
@@ -1097,7 +1111,7 @@ public class LevelController : MonoBehaviour
         if (Inp.Pressed(K.Confirm))
         {
             var it = shopItems[shopSel];
-            if (it.owned()) { RefreshShop("VOCE JA COMPROU ESSE ITEM NESTA FASE."); return; }
+            if (it.owned()) { RefreshShop("VOCÊ JÁ COMPROU ESSE ITEM NESTA FASE."); return; }
             if (GameSettings.Coins < it.price) { AudioManager.Sfx("voltar"); RefreshShop("FALTAM " + (it.price - GameSettings.Coins) + " MOEDAS."); return; }
             GameSettings.Coins -= it.price;
             it.buy();
@@ -1118,22 +1132,95 @@ public class LevelController : MonoBehaviour
     void FoundMom()
     {
         if (state != State.Playing) return;
+        state = State.Hug;
+        prompt.SetActive(false);
+        bigMapRoot.SetActive(false);
+        foreach (var a in alerts) a.SetActive(false);
+        AudioManager.Sfx("vitoria");
+        StartCoroutine(HugAnim());
+    }
+
+    // a mamae vem ate a crianca, as duas se abracam, sobem coracoes e a camera chega perto
+    System.Collections.IEnumerator HugAnim()
+    {
+        bool last = levelIndex == Levels.Count - 1;
+        pc.enabled = false;
+        var prb = player.GetComponent<Rigidbody2D>();
+        if (prb != null) { prb.linearVelocity = Vector2.zero; prb.bodyType = RigidbodyType2D.Kinematic; }
+        foreach (var b in mom.GetComponents<MonoBehaviour>())
+            if (b is Skater || b is IdleLookAround || b is Walker) b.enabled = false;
+        var mds = mom.GetComponent<DirectionalSprite>();
+        var pds = player.GetComponent<DirectionalSprite>();
+        float side = mom.position.x >= player.position.x ? 1f : -1f;
+        Vector2 target = (Vector2)player.position + new Vector2(side * 0.42f, 0.02f);
+        Vector2 from = mom.position;
+        float walk = Mathf.Clamp(Vector2.Distance(from, target) / 2.6f, 0.25f, 1.2f);
+        camSize = Mathf.Min(camSize, 1.9f);
+        float t = 0f;
+        while (t < walk)
+        {
+            t += Time.deltaTime;
+            mom.position = Vector2.Lerp(from, target, Mathf.SmoothStep(0f, 1f, t / walk));
+            if (mds != null) mds.Face(target - from);
+            if (pds != null) pds.Face(new Vector2(side, 0f));
+            yield return null;
+        }
+        if (mds != null) mds.Face(new Vector2(-side, 0f));
+        if (pds != null) pds.Face(new Vector2(side, 0f));
+        // abraco: as duas se apertam um pouquinho e os coracoes sobem
+        Vector3 ms = mom.localScale, ps = player.localScale;
+        Vector3 mp = mom.position;
+        float dur = last ? 3.2f : 2f, nextHeart = 0f;
+        var hearts = new List<Transform>();
+        t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float sq = 1f + Mathf.Sin(Mathf.Min(1f, t * 2f) * Mathf.PI) * 0.06f;
+            mom.localScale = new Vector3(ms.x * sq, ms.y / sq, ms.z);
+            player.localScale = new Vector3(ps.x * sq, ps.y / sq, ps.z);
+            mom.position = Vector3.Lerp(mp, (Vector3)target - new Vector3(side * 0.08f, 0f, 0f), Mathf.Min(1f, t * 3f));
+            if (t >= nextHeart)
+            {
+                nextHeart = t + 0.28f;
+                var h = new GameObject("Coracao").AddComponent<SpriteRenderer>();
+                h.sprite = GenSprites.Heart;
+                h.sortingOrder = 35;
+                h.transform.position = (Vector2)(player.position + mom.position) / 2f + new Vector2(Random.Range(-0.35f, 0.35f), 0.7f);
+                hearts.Add(h.transform);
+            }
+            foreach (var h in hearts)
+            {
+                if (h == null) continue;
+                h.position += Vector3.up * Time.deltaTime * 0.7f;
+                var sr = h.GetComponent<SpriteRenderer>();
+                sr.color = new Color(1f, 1f, 1f, Mathf.Clamp01(sr.color.a - Time.deltaTime * 0.6f));
+            }
+            yield return null;
+        }
+        mom.localScale = ms; player.localScale = ps;
+        foreach (var h in hearts) if (h != null) Destroy(h.gameObject);
         state = State.Won;
+        ShowResult();
+    }
+
+    void ShowResult()
+    {
         int score = PhaseScore();
         GameSettings.TotalScore += score;
-        AudioManager.Sfx("vitoria");
         string stats = "TEMPO: " + elapsed.ToString("0.0") + "s   MOEDAS PEGAS: " + coinsTaken + "/" + dif.Coins +
-                       "\nESBARROES: " + hits + "   ENGANOS: " + mistakes + "\nPONTOS DA FASE: " + score;
+                       "\nESBARRÕES: " + hits + "   ENGANOS: " + mistakes + "\nPONTOS DA FASE: " + score;
         if (levelIndex < Levels.Count - 1)
         {
-            End("VOCE ACHOU A MAMAE!\n\n" + stats + "\nTOTAL: " + GameSettings.TotalScore + "   MOEDAS GUARDADAS: " + GameSettings.Coins,
-                "ENTER: PROXIMA FASE   M: MENU");
+            End("VOCÊ ACHOU A MAMÃE!\n\n" + stats + "\nTOTAL: " + GameSettings.TotalScore + "   MOEDAS GUARDADAS: " + GameSettings.Coins,
+                "ENTER: PRÓXIMA FASE   M: MENU");
         }
         else
         {
             bool rec = GameSettings.SaveRecord(mode, GameSettings.TotalScore);
-            End("PARABENS! VOCE ACHOU A MAMAE\nNAS " + Levels.Count + " FASES!\n\n" + stats + "\nTOTAL: " + GameSettings.TotalScore +
-                (rec ? "\nNOVO RECORDE!" : "\nRECORDE: " + GameSettings.Record(mode)), "R: JOGAR DE NOVO   M: MENU");
+            ShowEnding();
+            End("FIM!\nA MAMÃE TE ABRAÇOU BEM APERTADO\nE VOCÊS VOLTARAM PARA CASA JUNTINHOS.\n\n" + stats + "\nTOTAL: " + GameSettings.TotalScore +
+                (rec ? "   NOVO RECORDE!" : "   RECORDE: " + GameSettings.Record(mode)), "R: JOGAR DE NOVO   M: MENU");
         }
     }
 
@@ -1167,7 +1254,7 @@ public class LevelController : MonoBehaviour
         foreach (var col in kidnapper.GetComponents<Collider2D>()) col.enabled = false;
         if (prb != null) { prb.linearVelocity = Vector2.zero; prb.bodyType = RigidbodyType2D.Kinematic; prb.interpolation = RigidbodyInterpolation2D.None; }
         if (krb != null) krb.interpolation = RigidbodyInterpolation2D.None;
-        ShowBanner("A MULHER DE PRETO NAO ERA A MAMAE!\nELA PEGOU VOCE PELA MAO...", 8f);
+        ShowBanner("A MULHER DE PRETO NÃO ERA A MAMÃE!\nELA PEGOU VOCÊ PELA MÃO...", 8f);
 
         // 1) ela vem para o lado da crianca
         Vector2 kp = kidnapper.position;
@@ -1212,12 +1299,12 @@ public class LevelController : MonoBehaviour
         Destroy(fade.gameObject);
 
         state = State.Lost;
-        string why = "VOCE FOI SEQUESTRADO!\nA MULHER DE PRETO NAO ERA A MAMAE.\nA SUA TEM " + def.Outfit;
+        string why = "VOCÊ FOI SEQUESTRADO!\nA MULHER DE PRETO NÃO ERA A MAMÃE.\nA SUA TEM " + def.Outfit;
         if (mode == GameMode.ContraOTempo)
         {
             bool rec = GameSettings.SaveRecord(mode, GameSettings.TotalScore);
-            End(why + "\n\nVOCE CHEGOU ATE A FASE " + (levelIndex + 1) + "\nTOTAL: " + GameSettings.TotalScore +
-                (rec ? "\nNOVO RECORDE!" : "\nRECORDE: " + GameSettings.Record(mode)), "R: COMECAR DE NOVO   M: MENU");
+            End(why + "\n\nVOCÊ CHEGOU ATÉ A FASE " + (levelIndex + 1) + "\nTOTAL: " + GameSettings.TotalScore +
+                (rec ? "\nNOVO RECORDE!" : "\nRECORDE: " + GameSettings.Record(mode)), "R: COMEÇAR DE NOVO   M: MENU");
         }
         else End(why, "R: TENTAR DE NOVO   M: MENU");
     }
@@ -1230,10 +1317,23 @@ public class LevelController : MonoBehaviour
         if (mode == GameMode.ContraOTempo)
         {
             bool rec = GameSettings.SaveRecord(mode, GameSettings.TotalScore);
-            End("O TEMPO ACABOU!\nVOCE CHEGOU ATE A FASE " + (levelIndex + 1) + "\nTOTAL: " + GameSettings.TotalScore +
-                (rec ? "\nNOVO RECORDE!" : "\nRECORDE: " + GameSettings.Record(mode)), "R: COMECAR DE NOVO   M: MENU");
+            End("O TEMPO ACABOU!\nVOCÊ CHEGOU ATÉ A FASE " + (levelIndex + 1) + "\nTOTAL: " + GameSettings.TotalScore +
+                (rec ? "\nNOVO RECORDE!" : "\nRECORDE: " + GameSettings.Record(mode)), "R: COMEÇAR DE NOVO   M: MENU");
         }
-        else End("O TEMPO ACABOU!\nA MAMAE ESTA ESPERANDO...", "R: TENTAR DE NOVO   M: MENU");
+        else End("O TEMPO ACABOU!\nA MAMÃE ESTÁ ESPERANDO...", "R: TENTAR DE NOVO   M: MENU");
+    }
+
+    // final da historia: a mamae e a crianca juntas, com um coracao no meio (sem creditos)
+    void ShowEnding()
+    {
+        var t = overlay.transform;
+        var pic = UIKit.Rect(t, "Final", new Vector2(0.5f, 0.5f), new Vector2(0, 215), new Vector2(400, 150));
+        var momPic = momSprites != null ? momSprites[0] : Resources.Load<Sprite>("Art/Mae/east");
+        var kidPic = Resources.Load<Sprite>("Art/Crianca/west");
+        UIKit.Picture(pic, momPic, new Vector2(0.5f, 0.5f), new Vector2(-46, 0), new Vector2(140, 140)).preserveAspect = true;
+        UIKit.Picture(pic, kidPic, new Vector2(0.5f, 0.5f), new Vector2(46, -8), new Vector2(120, 120)).preserveAspect = true;
+        UIKit.Picture(pic, GenSprites.Heart, new Vector2(0.5f, 0.5f), new Vector2(0, 62), new Vector2(46, 40));
+        centerText.rectTransform.anchoredPosition = new Vector2(0, -80);
     }
 
     void End(string text, string keys)
@@ -1254,7 +1354,7 @@ public class LevelController : MonoBehaviour
         momMoveAt = elapsed + dif.MomMovesEvery;
         hintText.text = "";
         hintNext = 0;
-        ShowBanner("A MAMAE MUDOU DE LUGAR! A DICA ANTIGA NAO VALE MAIS", 2.5f);
+        ShowBanner("A MAMÃE MUDOU DE LUGAR! A DICA ANTIGA NÃO VALE MAIS", 2.5f);
     }
 
     // ---------------------------------------------------------------- loop
@@ -1307,7 +1407,7 @@ public class LevelController : MonoBehaviour
         UpdateHud();
 
         // a tecla que terminou a fase (E) nao pode pular a tela de resultado no mesmo quadro
-        if (state == State.Playing || state == State.Kidnap || Time.frameCount == endedFrame) return;
+        if (state == State.Playing || state == State.Kidnap || state == State.Hug || Time.frameCount == endedFrame) return;
         if (state == State.Won && levelIndex < Levels.Count - 1 && Inp.Pressed(K.Enter)) NextLevel();
         else if (Inp.Pressed(K.Restart)) Restart();
         else if (Inp.Pressed(K.Menu)) { Time.timeScale = 1f; SceneManager.LoadScene("Menu"); }
@@ -1342,7 +1442,7 @@ public class LevelController : MonoBehaviour
         if (elapsed >= rainAt && rainUntil < 0f)
         {
             rainUntil = elapsed + RainSeconds;
-            ShowBanner("COMECOU A CHOVER!" + (boughtUmbrella ? " O GUARDA-CHUVA TE PROTEGE." : " A TELA VAI EMBACAR."), 2.5f);
+            ShowBanner("COMEÇOU A CHOVER!" + (boughtUmbrella ? " O GUARDA-CHUVA TE PROTEGE." : " A TELA VAI EMBAÇAR."), 2.5f);
         }
         UpdateRain();
 
@@ -1367,10 +1467,20 @@ public class LevelController : MonoBehaviour
             float d = Vector2.Distance(Feet(l), pf);
             if (d < best) { best = d; near = l; lift = 0.8f; }
         }
-        if (kidnapper != null)
+        for (int i = 0; i < kidnappers.Count; i++)
         {
-            float d = Vector2.Distance(Feet(kidnapper), pf);
-            if (d < best + 0.15f && d < best) { best = d; near = kidnapper; lift = 1.0f; }
+            var k = kidnappers[i];
+            float d = Vector2.Distance(Feet(k), pf);
+            if (d < best) { best = d; near = k; lift = 1.0f; }
+            // "!" vermelho quando a crianca chega perto (com um som curto na primeira vez)
+            bool close = d < AlertDistance;
+            alerts[i].SetActive(close);
+            if (close)
+            {
+                alerts[i].transform.localPosition = new Vector3(0, 1.05f + Mathf.Abs(Mathf.Sin(Time.time * 6f)) * 0.08f, 0);
+                if (!alerted[i]) { alerted[i] = true; AudioManager.Sfx("alerta", 0.8f); }
+            }
+            else if (d > AlertDistance + 1f) alerted[i] = false;
         }
         foreach (var tt in totems)
         {
@@ -1409,8 +1519,25 @@ public class LevelController : MonoBehaviour
             arrow.rotation = Quaternion.Euler(0, 0, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
         }
         var target2 = new Vector3(player.position.x, player.position.y, -10);
+        cam.transform.position -= shakeOff;   // tira a tremida do quadro anterior antes de seguir a crianca
+        shakeOff = Vector3.zero;
         cam.transform.position = Vector3.Lerp(cam.transform.position, target2, 1f - Mathf.Exp(-8f * Time.unscaledDeltaTime));
         ClampCamera();
+        // tremida no esbarrao e quando o policial pega
+        if (Time.time < shakeUntil)
+        {
+            float a = shakeAmp * Mathf.Clamp01((shakeUntil - Time.time) / 0.25f);
+            shakeOff = new Vector3(Random.Range(-a, a), Random.Range(-a, a), 0f);
+            cam.transform.position += shakeOff;
+        }
+    }
+
+    Vector3 shakeOff;
+
+    void Shake(float seconds, float amp)
+    {
+        shakeUntil = Time.time + seconds;
+        shakeAmp = amp;
     }
 
     void ClampCamera()
@@ -1431,14 +1558,14 @@ public class LevelController : MonoBehaviour
         leftText.text = "FASE " + (levelIndex + 1) + "/" + Levels.Count + "  " + def.Name + "\nMOEDAS " + GameSettings.Coins + "  PONTOS " + GameSettings.TotalScore;
         var items = new List<string>();
         if (shields > 0) items.Add("ESCUDO x" + shields);
-        if (boughtShoes) items.Add("TENIS");
-        if (boughtGlasses) items.Add("OCULOS");
+        if (boughtShoes) items.Add("TÊNIS");
+        if (boughtGlasses) items.Add("ÓCULOS");
         if (boughtLamp) items.Add("LANTERNA");
         if (boughtUmbrella) items.Add("GUARDA-CHUVA");
         if (Disguised) items.Add("DISFARCE " + Mathf.CeilToInt(disguiseUntil - Time.time) + "s");
         if (pc.Frozen) items.Add("PRESO " + Mathf.CeilToInt(pc.FrozenLeft) + "s");
         if (blackoutUntil > 0f && elapsed < blackoutUntil && !dif.Dark) items.Add("SEM LUZ " + Mathf.CeilToInt(blackoutUntil - elapsed) + "s");
-        rightText.text = GameSettings.ModeName(mode) + " - " + GameSettings.DifName(dif.Dif) + "   ESBARROES " + hits + "\n" + (items.Count > 0 ? string.Join(" ", items) + "   " : "") + "ESC: PAUSA";
+        rightText.text = GameSettings.ModeName(mode) + " - " + GameSettings.DifName(dif.Dif) + "   ESBARRÕES " + hits + "\n" + (items.Count > 0 ? string.Join(" ", items) + "   " : "") + "ESC: PAUSA";
         if (bannerPanel.gameObject.activeSelf && Time.unscaledTime > bannerUntil) bannerPanel.gameObject.SetActive(false);
         if (youMarker != null) youMarker.SetActive(state == State.Playing && Time.time < youMarkerUntil);
         // disfarce: a crianca fica meio acinzentada

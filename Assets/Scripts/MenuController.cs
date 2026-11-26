@@ -41,12 +41,13 @@ public class MenuController : MonoBehaviour
         bg.rectTransform.offsetMin = bg.rectTransform.offsetMax = Vector2.zero;
         UIKit.Panel(canvas.transform, new Color(0, 0, 0, 0.45f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(2400, 1400));
 
-        title = UIKit.Label(canvas.transform, "ONDE ESTA\nA MAMAE?", 54, Orange, new Vector2(0.5f, 1f), new Vector2(0, -125), new Vector2(1100, 200));
+        title = UIKit.Label(canvas.transform, "ONDE ESTÁ\nA MAMÃE?", 54, Orange, new Vector2(0.5f, 1f), new Vector2(0, -125), new Vector2(1100, 200));
         hint = UIKit.Label(canvas.transform, DefaultHint, 12, Cream,
             new Vector2(0.5f, 0f), new Vector2(0, 50), new Vector2(1200, 60));
         rowsRoot = UIKit.Rect(canvas.transform, "Rows", new Vector2(0.5f, 0.5f), new Vector2(0, -110), new Vector2(900, 400));
 
         AudioManager.Music("musica_menu");
+        AudioManager.StopAmbient();
         ShowMain();
     }
 
@@ -55,7 +56,7 @@ public class MenuController : MonoBehaviour
         onBack = null;
         Build(
             new Row { text = () => "JOGAR", confirm = ShowModes },
-            new Row { text = () => "OPCOES", confirm = ShowOptions },
+            new Row { text = () => "OPÇÕES", confirm = ShowOptions },
             new Row { text = () => "SAIR", confirm = Quit });
     }
 
@@ -63,10 +64,10 @@ public class MenuController : MonoBehaviour
     {
         onBack = ShowMain;
         Build(
-            new Row { text = () => "HISTORIA", confirm = () => ShowDifficulty(GameMode.Historia),
+            new Row { text = () => "HISTÓRIA", confirm = () => ShowDifficulty(GameMode.Historia),
                 desc = "6 FASES, CADA UMA COM UM MAPA NOVO E MAIOR. PERDEU? TENTA A FASE DE NOVO." },
             new Row { text = () => "CONTRA O TEMPO", confirm = () => ShowDifficulty(GameMode.ContraOTempo),
-                desc = "MENOS TEMPO NAS 6 FASES. SE O TEMPO ACABAR, RECOMECA DA FASE 1." },
+                desc = "MENOS TEMPO NAS 6 FASES. SE O TEMPO ACABAR, RECOMEÇA DA FASE 1." },
             new Row { text = () => "VOLTAR", confirm = ShowMain });
     }
 
@@ -75,14 +76,14 @@ public class MenuController : MonoBehaviour
         onBack = ShowModes;
         string clock = m == GameMode.Livre ? "" : "MAIS TEMPO, ";
         Build(
-            new Row { text = () => "FACIL", confirm = () => Play(m, Dificuldade.Facil),
-                desc = clock + "POUCAS MULHERES PARECIDAS, SEM APAGAO NEM CHUVA. AS DICAS COMECAM PELA MAIS CLARA." + RecordText(m, Dificuldade.Facil) },
+            new Row { text = () => "FÁCIL", confirm = () => Play(m, Dificuldade.Facil),
+                desc = clock + "POUCAS MULHERES PARECIDAS, SEM APAGÃO NEM CHUVA. AS DICAS COMEÇAM PELA MAIS CLARA." + RecordText(m, Dificuldade.Facil) },
             new Row { text = () => "NORMAL", confirm = () => Play(m, Dificuldade.Normal),
-                desc = "MAIS MULHERES PARECIDAS. PODE FALTAR LUZ OU COMECAR A CHOVER." + RecordText(m, Dificuldade.Normal) },
-            new Row { text = () => "DIFICIL", confirm = () => Play(m, Dificuldade.Dificil),
-                desc = (m == GameMode.Livre ? "" : "MENOS TEMPO, ") + "MUITAS MAMAES PARECIDAS. AS DICAS COMECAM PELAS MAIS VAGAS." + RecordText(m, Dificuldade.Dificil) },
+                desc = "MAIS MULHERES PARECIDAS. PODE FALTAR LUZ OU COMEÇAR A CHOVER." + RecordText(m, Dificuldade.Normal) },
+            new Row { text = () => "DIFÍCIL", confirm = () => Play(m, Dificuldade.Dificil),
+                desc = (m == GameMode.Livre ? "" : "MENOS TEMPO, ") + "MUITAS MAMÃES PARECIDAS. AS DICAS COMEÇAM PELAS MAIS VAGAS." + RecordText(m, Dificuldade.Dificil) },
             new Row { text = () => "EXTRA HARD (NO ESCURO)", confirm = () => Play(m, Dificuldade.ExtraHard),
-                desc = "COMO O DIFICIL, MAS TUDO FICA ESCURO: VOCE SO ENXERGA POUCOS PASSOS EM VOLTA." + RecordText(m, Dificuldade.ExtraHard) },
+                desc = "COMO O DIFÍCIL, MAS TUDO FICA ESCURO: VOCÊ SÓ ENXERGA POUCOS PASSOS EM VOLTA." + RecordText(m, Dificuldade.ExtraHard) },
             new Row { text = () => "VOLTAR", confirm = ShowModes });
         sel = 1; // NORMAL ja vem selecionado
         Refresh();
@@ -100,7 +101,7 @@ public class MenuController : MonoBehaviour
             },
             new Row
             {
-                text = () => "MUSICA  " + (GameSettings.MusicOn ? "LIGADA" : "DESLIGADA"),
+                text = () => "MÚSICA  " + (GameSettings.MusicOn ? "LIGADA" : "DESLIGADA"),
                 adjust = d => ToggleMusic(),
                 confirm = ToggleMusic
             },

@@ -12,3 +12,7 @@
 *.user
 *.pidb
 *.suo
+
+# ferramentas e rascunhos (scripts de arte, testes, logs) e imagens de referencia
+Tools/
+src/assets/cenarios/Gemini_Generated_Image_*
