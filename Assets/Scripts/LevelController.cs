@@ -1,20 +1,21 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 // Monta a fase atual em codigo (cenario, paredes, personagens, moedas, totens, lojinha, HUD, mapa)
-// e controla o fluxo: apresentacao da mamae, tempo, dicas, lojinha, vitoria, derrota, pausa e proxima fase.
+// e controla o fluxo: apresentacao da mamae, tempo, dicas, lojinha, apagao, chuva, vitoria, derrota, pausa e proxima fase.
 public class LevelController : MonoBehaviour
 {
-    enum State { Intro, Playing, Shop, Won, Lost, Paused }
+    enum State { Intro, Playing, Shop, Won, Lost, Paused, Kidnap }
 
-    // Cada cenario tem 2752x1536 px com 100 px por unidade (27.52 x 15.36). Nas fases 4 e 5 eles sao empilhados.
     float WorldW, WorldH;
     const float Cell = 0.25f;          // grade usada para saber onde da para andar
-    const float Clearance = 0.22f;     // folga em volta das paredes para uma celula contar como chao
+    const float Clearance = 0.2f;      // folga em volta das paredes (igual ao raio dos pes da crianca)
     const float FeetOffset = 0.2f;     // os pes do personagem ficam abaixo do centro do sprite
     const float TalkDistance = 1.1f;
+    const int CharOrder = 8;           // todos os NPCs na mesma camada: quem esta mais embaixo aparece na frente
 
     static readonly Color Cream = new Color(1f, 0.93f, 0.78f);
     static readonly Color Gold = new Color(1f, 0.85f, 0.3f);
@@ -29,23 +30,35 @@ public class LevelController : MonoBehaviour
     float introShownAt;
 
     float timeLeft, elapsed, momMoveAt, nextTick, bannerUntil, youMarkerUntil;
-    int hits, coinsTaken, mistakes;
+    int hits, coinsTaken, mistakes, caught;
 
     Camera cam;
     float camSize;
-    Transform player, mom, shop;
+    Transform player, mom, shop, kidnapper;
     PlayerController pc;
     Sprite[] momSprites;
     readonly List<Transform> lookalikes = new List<Transform>();
     readonly List<Transform> coins = new List<Transform>();
     readonly List<Totem> totems = new List<Totem>();
     GameObject prompt, youMarker;
-    Transform darkness;       // Extra Hard: escuridao em volta da crianca
+    Transform darkness, arrow;  // escuridao (Extra Hard e apagao) e seta do megafone
     float darkScale = 1f, wrongMomUntil;
+
+    // eventos: apagao (lugares fechados) e chuva (lugares abertos), uma vez por fase
+    float blackoutAt = float.MaxValue, blackoutUntil = -1f, rainAt = float.MaxValue, rainUntil = -1f;
+    const float BlackoutSeconds = 10f, RainSeconds = 25f, BlackoutRadius = 3.2f;
+    GameObject rainRoot;
+    Image fog;
+    RectTransform[] drops;
+    float fogAlpha;
 
     // itens da lojinha (valem so na fase em que foram comprados)
     int shields;
-    bool boughtShield, boughtShoes, boughtGlasses, boughtClock, boughtHint;
+    bool boughtShield, boughtShoes, boughtGlasses, boughtClock, boughtHint, boughtLamp, boughtUmbrella, boughtDisguise, boughtMegaphone;
+    float disguiseUntil = -1f, arrowUntil = -1f;
+
+    // dicas: cada totem (ou a dica comprada) da a proxima da lista, nunca a mesma
+    int hintNext, hintSeed;
 
     // grade de chao andavel
     int gw, gh;
@@ -68,6 +81,10 @@ public class LevelController : MonoBehaviour
     class ShopItem { public string name, desc; public int price; public System.Func<bool> owned; public System.Action buy; }
     List<ShopItem> shopItems;
 
+    bool HasBlackout => def.Indoor && dif.Events && !dif.Dark;
+    bool HasRain => def.Outdoor && dif.Events;
+    bool Disguised => Time.time < disguiseUntil;
+
     // ---------------------------------------------------------------- montagem
 
     void Start()
@@ -82,14 +99,33 @@ public class LevelController : MonoBehaviour
         WorldH = def.WorldH;
         timeLeft = dif.Seconds;
         startCoins = GameSettings.Coins;
+        hintSeed = Random.Range(0, 1000);
+
+        // personagens na mesma camada sao desenhados pela altura: quem esta mais embaixo fica na frente
+        GraphicsSettings.transparencySortMode = TransparencySortMode.CustomAxis;
+        GraphicsSettings.transparencySortAxis = Vector3.up;
 
         momSprites = DressMom(def.MomShirt, def.MomSkirt);
         BuildWorld();
         BuildHud();
+        BuildRain();
         BuildShopItems();
+        PlanEvents();
         AudioManager.StopMusic();
         AudioManager.Music("musica_fase");
         ShowIntro();
+    }
+
+    void PlanEvents()
+    {
+        float len = mode == GameMode.Livre ? 90f : dif.Seconds;
+        if (HasBlackout) blackoutAt = Random.Range(15f, Mathf.Max(20f, len * 0.6f));
+        if (HasRain)
+        {
+            rainAt = Random.Range(12f, Mathf.Max(18f, len * 0.5f));
+            // os dois na mesma fase (parque de diversoes): nao deixa um cair em cima do outro
+            if (HasBlackout && Mathf.Abs(rainAt - blackoutAt) < 30f) rainAt = blackoutAt + 30f;
+        }
     }
 
     void BuildWorld()
@@ -97,22 +133,29 @@ public class LevelController : MonoBehaviour
         var camGo = new GameObject("Main Camera") { tag = "MainCamera" };
         cam = camGo.AddComponent<Camera>();
         cam.orthographic = true;
-        camSize = dif.CameraSize;
+        camSize = dif.CameraSize * 0.9f;   // visao 10% menor (mais perto)
         cam.orthographicSize = camSize;
         cam.backgroundColor = Color.black;
         cam.clearFlags = CameraClearFlags.SolidColor;
+        cam.transparencySortMode = TransparencySortMode.CustomAxis;
+        cam.transparencySortAxis = Vector3.up;
         camGo.transform.position = new Vector3(0, 0, -10);
         camGo.AddComponent<AudioListener>();
 
-        // um ou mais cenarios, de cima para baixo
+        // cenario (cada fase tem o seu)
         for (int k = 0; k < def.Parts.Length; k++)
         {
             var bg = new GameObject("Cenario" + k).AddComponent<SpriteRenderer>();
             bg.sprite = Resources.Load<Sprite>(def.Parts[k]);
+            // cenarios montados em pixel art: sem borrar os pixels
+            if (bg.sprite != null && def.Parts[k].EndsWith("_v8")) bg.sprite.texture.filterMode = FilterMode.Point;
             bg.sortingOrder = -10;
-            bg.transform.position = new Vector3(0f, WorldH / 2f - LevelDef.PartH * (k + 0.5f), 0f);
-            // escurece um pouco o cenario para os personagens vivos se destacarem; nas fases 4 e 5 muda a luz
+            float y = def.Parts.Length == 1 ? 0f : WorldH / 2f - LevelDef.PartH * (k + 0.5f);
+            bg.transform.position = new Vector3(0f, y, 0f);
+            bg.transform.localScale = Vector3.one * def.BgScale;
+            // escurece um pouco o cenario para os personagens vivos se destacarem
             bg.color = def.Tint;
+            if (def.Parts.Length == 1 && def.Occluders != null) BuildOccluders(bg);
         }
 
         var walls = new GameObject("Paredes");
@@ -143,6 +186,7 @@ public class LevelController : MonoBehaviour
         circle.radius = 0.2f;
         circle.offset = new Vector2(0, -FeetOffset);
         pc = p.AddComponent<PlayerController>();
+        pc.ice = def.Ice;
         Outline.Add(p, Gold, 0.045f);
         var ring = new GameObject("Anel").AddComponent<SpriteRenderer>();
         ring.sprite = GenSprites.Ring;
@@ -151,50 +195,77 @@ public class LevelController : MonoBehaviour
         ring.sortingOrder = 3;
         player = p.transform;
         youMarker = MakeWorldText(p.transform, "VOCE", new Vector3(0, 0.75f, 0), Gold);
+        bool skating = def.SkateLoop != null && def.SkateLoop.Length > 2;
 
-        // Mamae: lugar sorteado, longe da crianca, com a roupa desta fase
-        var momGo = MakeCharacter("Mamae", "Mae", FeetToPos(PickMomSpot()), 8);
+        // Mamae: sem contorno (so aparece "APERTE E" quando a crianca chega perto)
+        var momGo = MakeCharacter("Mamae", "Mae", FeetToPos(PickMomSpot()), CharOrder);
         if (momSprites != null) momGo.GetComponent<DirectionalSprite>().Use(momSprites);
         mom = momGo.transform;
-        Outline.Add(momGo, Color.white);
-        momGo.AddComponent<IdleLookAround>();
+        if (skating) AddSkater(momGo, 0.75f, 2.4f);   // na pista de gelo a mamae fica patinando
+        else momGo.AddComponent<IdleLookAround>();
         momMoveAt = dif.MomMovesEvery > 0 ? dif.MomMovesEvery : float.MaxValue;
 
-        // Mulheres parecidas com a mamae (roupa parecida, mas nunca igual)
+        // Mulheres parecidas com a mamae (roupa bem parecida, mas nunca igual)
         for (int i = 0; i < dif.Lookalikes; i++)
         {
-            var c = RandomFarCell(3f, 2.5f, lookalikes);
-            var go = MakeCharacter("Parecida", "Mae", FeetToPos(CellCenter(c)), 7);
+            var c = RandomFarCell(3f, 1.6f, lookalikes);
+            var go = MakeCharacter("Parecida", "Mae", FeetToPos(CellCenter(c)), CharOrder);
             DressLookalike(go, i);
-            Outline.Add(go, Color.white);
-            AddWalker(go, RandomRoute(c), 0.9f + Random.value * 0.4f, false);
-            go.GetComponent<Collider2D>().isTrigger = true; // atravessavel: nao trava a passagem
+            if (skating && i % 5 < 3) AddSkater(go, Random.Range(0.45f, 1.15f), Random.Range(2.2f, 3.4f));
+            else AddWalker(go, RandomRoute(c), 0.9f + Random.value * 0.4f, false, true);
             lookalikes.Add(go.transform);
         }
+
+        // Sequestradora: corpo um pouco maior e roupa toda preta. Falar com ela e perder o jogo.
+        if (dif.Kidnapper)
+        {
+            var c = RandomFarCell(6f, 3f, lookalikes);
+            var go = MakeCharacter("Sequestradora", "Mae", FeetToPos(CellCenter(c)), CharOrder, 1.3f);
+            var ks = DressSafe(() => Recolor.Kidnapper());
+            if (ks != null) go.GetComponent<DirectionalSprite>().Use(ks);
+            else go.GetComponent<SpriteRenderer>().color = new Color(0.3f, 0.3f, 0.3f);
+            AddWalker(go, RandomRoute(c), 0.7f, false, true);
+            kidnapper = go.transform;
+        }
+
+        // Multidao estilo "Onde esta o Wally": mulheres, homens e criancas com roupas variadas
+        BuildCrowd(skating);
 
         // Segurancas fazendo ronda pelos corredores
         for (int i = 0; i < dif.Guards; i++)
         {
             var c = RandomFarCell(4f, 1.5f);
-            var go = MakeCharacter("Seguranca", "Policial", FeetToPos(CellCenter(c)), 6);
+            var go = MakeCharacter("Seguranca", "Policial", FeetToPos(CellCenter(c)), CharOrder);
             Outline.Add(go, new Color(0.55f, 0.75f, 1f));
-            AddWalker(go, RandomRoute(c), dif.GuardSpeed * (0.85f + Random.value * 0.3f), true);
+            AddWalker(go, RandomRoute(c), dif.GuardSpeed * (0.85f + Random.value * 0.3f), false, true).level = this;   // da para atravessar, mas deixa lento
         }
 
-        // Lojinha: perto do comeco, para dar tempo de juntar moedas e voltar
-        var sc = RandomCellBetween(3.5f, 8f);
+        // Policial grandao: se pegar a crianca, leva para outro lugar e ela fica presa por 5 segundos
+        var bigSprites = dif.BigCops > 0 ? DressSafe(() => Recolor.BigCop()) : null;
+        for (int i = 0; i < dif.BigCops; i++)
+        {
+            var c = RandomFarCell(7f, 3f);
+            var go = MakeCharacter("PolicialGrandao", "Policial", FeetToPos(CellCenter(c)), CharOrder, 1.5f);
+            if (bigSprites != null) go.GetComponent<DirectionalSprite>().Use(bigSprites);
+            Outline.Add(go, new Color(1f, 0.35f, 0.3f), 0.03f);
+            var w = AddWalker(go, RandomRoute(c, 3, 6), dif.GuardSpeed * 0.95f, true, true);
+            w.level = this;
+            w.bigCop = true;
+        }
+
+        // Lojinha: lugar fixo de cada fase, encostada num canto, sem fechar nenhuma passagem
         var shopGo = new GameObject("Lojinha");
-        shopGo.transform.position = CellCenter(sc) + Vector2.down * 0.1f;
-        shopGo.transform.localScale = Vector3.one * 1.3f;
+        shopGo.transform.position = def.ShopPos;
         var ssr = shopGo.AddComponent<SpriteRenderer>();
         ssr.sprite = GenSprites.Shop;
         ssr.sortingOrder = 5;
-        MakeWorldText(shopGo.transform, "LOJINHA", new Vector3(0, 1.45f, 0), ShopGreen, 0.8f);
+        MakeWorldText(shopGo.transform, "LOJINHA", new Vector3(0, 1.3f, 0), ShopGreen, 0.8f);
         var sbox = shopGo.AddComponent<BoxCollider2D>(); // a barraca e solida, ninguem atravessa
         sbox.size = new Vector2(0.95f, 0.5f);
         sbox.offset = new Vector2(0, 0.28f);
         shop = shopGo.transform;
         Physics2D.SyncTransforms();
+        var sc = Cellof(def.ShopPos);
         for (int dx = -3; dx <= 3; dx++)
             for (int dy = -1; dy <= 4; dy++)
             {
@@ -207,7 +278,7 @@ public class LevelController : MonoBehaviour
         var avoid = new List<Transform> { shop };
         for (int i = 0; i < dif.Coins; i++)
         {
-            var c = RandomFarCell(2f, 1.2f, coins);
+            var c = RandomFarCell(2f, 2.5f, coins);
             var go = new GameObject("Moeda");
             go.transform.position = CellCenter(c);
             var sr = go.AddComponent<SpriteRenderer>();
@@ -235,19 +306,27 @@ public class LevelController : MonoBehaviour
             var signs = new GameObject("Placas");
             for (int i = 0; i < def.PlaceNames.Length; i++)
             {
-                var s = MakeWorldText(signs.transform, ShortName(def.PlaceNames[i]), Vector3.zero, Cream, 0.75f);
+                var s = MakeWorldText(signs.transform, def.PlaceNames[i], Vector3.zero, Cream, 0.75f);
                 s.transform.position = def.PlacePos[i];
             }
         }
 
-        if (dif.Dark)
+        // escuridao: sempre no Extra Hard; nas outras, so durante o apagao
+        if (dif.Dark || HasBlackout)
         {
             var dk = new GameObject("Escuridao").AddComponent<SpriteRenderer>();
             dk.sprite = DarkSprite();
-            dk.sortingOrder = 25; // por cima de tudo do cenario, abaixo dos textos
+            dk.sortingOrder = 40; // por cima de tudo, ate das placas: no escuro nao da para ler de longe
             darkness = dk.transform;
             darkness.position = player.position;
+            darkness.gameObject.SetActive(dif.Dark);
         }
+
+        var ar = new GameObject("Seta").AddComponent<SpriteRenderer>();
+        ar.sprite = GenSprites.Arrow;
+        ar.sortingOrder = 32;
+        arrow = ar.transform;
+        arrow.gameObject.SetActive(false);
 
         prompt = MakeWorldText(null, "APERTE E", Vector3.zero, Gold);
         prompt.SetActive(false);
@@ -256,28 +335,69 @@ public class LevelController : MonoBehaviour
         ClampCamera();
     }
 
-    GameObject MakeCharacter(string name, string folder, Vector2 pos, int order)
+    void BuildCrowd(bool skating)
+    {
+        float ms = def.MomShirt < 0f ? 345f : def.MomShirt, mk = def.MomSkirt < 0f ? 225f : def.MomSkirt;
+        var shirts = FarHues(ms, 60f);
+        var skirts = FarHues(mk, 45f);
+        var others = new List<Transform>();
+        for (int i = 0; i < dif.Crowd; i++)
+        {
+            var c = RandomFarCell(2.5f, 1.2f, others);
+            int kind = i % 3; // 0 mulher, 1 homem, 2 crianca
+            float scale = kind == 2 ? 0.85f : 1f;
+            var go = MakeCharacter("Pessoa", kind == 0 ? "Mae" : kind == 1 ? "Policial" : "Crianca", FeetToPos(CellCenter(c)), CharOrder, scale);
+            // poucas combinacoes de roupa por fase, para nao gerar desenhos demais
+            int v = (i / 3) % 5;
+            float h1 = Hues[(v * 3 + levelIndex + kind) % Hues.Length], h2 = Hues[(v * 5 + 2 + kind * 2) % Hues.Length];
+            Sprite[] look = null;
+            if (kind == 0) look = DressSafe(() => Recolor.Mom(shirts[(v * 2 + levelIndex) % shirts.Count], skirts[(v * 3 + 1) % skirts.Count]));
+            else if (kind == 1) look = DressSafe(() => Recolor.Man(h1, h2, v % 2 == 0));
+            else look = DressSafe(() => Recolor.Kid(h1, h2));
+            if (look != null) go.GetComponent<DirectionalSprite>().Use(look);
+            else go.GetComponent<SpriteRenderer>().color = Color.HSVToRGB(h1 / 360f, 0.3f, 1f);
+
+            if (skating && Random.value < 0.45f) AddSkater(go, Random.Range(0.4f, 1.15f), Random.Range(2f, 3.6f));
+            else if (Random.value < 0.3f) go.AddComponent<IdleLookAround>();   // parado, olhando vitrine
+            else AddWalker(go, RandomRoute(c), 0.6f + Random.value * 0.6f, false, true);
+            others.Add(go.transform);
+        }
+    }
+
+    GameObject MakeCharacter(string name, string folder, Vector2 pos, int order, float scale = 1f)
     {
         var go = new GameObject(name) { layer = 2 }; // Ignore Raycast: so as paredes contam nas consultas de fisica
         go.transform.position = pos;
         var sr = go.AddComponent<SpriteRenderer>();
         sr.sortingOrder = order;
         go.AddComponent<DirectionalSprite>().Load(folder);
-        go.transform.localScale = Vector3.one * 1.1f;
+        go.transform.localScale = Vector3.one * 1.1f * scale;
+        allChars.Add(go.transform);
         return go;
     }
 
-    void AddWalker(GameObject go, List<Vector2> route, float speed, bool guard)
+    Walker AddWalker(GameObject go, List<Vector2> route, float speed, bool big, bool passThrough)
     {
         var rb = go.AddComponent<Rigidbody2D>();
         rb.bodyType = RigidbodyType2D.Kinematic;
         var c = go.AddComponent<CircleCollider2D>();
-        c.radius = 0.22f;
-        c.offset = new Vector2(0, -FeetOffset);
+        float ls = go.transform.localScale.x;
+        c.radius = (big ? 0.3f : 0.242f) / ls;
+        c.offset = new Vector2(0, -0.22f / ls);
+        c.isTrigger = passThrough; // atravessavel: nao trava a passagem
         var w = go.AddComponent<Walker>();
         w.route = route;
         w.speed = speed;
-        w.level = guard ? this : null;
+        return w;
+    }
+
+    void AddSkater(GameObject go, float loopScale, float speed)
+    {
+        var s = go.AddComponent<Skater>();
+        s.loop = def.SkateLoop;
+        s.scale = loopScale;
+        s.speed = speed;
+        s.feet = FeetOffset;
     }
 
     GameObject MakeWorldText(Transform parent, string text, Vector3 local, Color color, float scale = 1f)
@@ -307,40 +427,123 @@ public class LevelController : MonoBehaviour
         return root;
     }
 
+    // ---------------------------------------------------------------- frente do cenario
+    // Pedacos do proprio desenho (copa de arvore, telhado de barraca, arco da entrada, guarda-sol...) que ficam
+    // NA FRENTE de quem passa atras deles. Assim o mapa tem profundidade: quem esta atras da arvore some atras dela.
+    class Occluder { public SpriteRenderer sr; public float baseY, topY, x0, x1; }
+    readonly List<Occluder> occluders = new List<Occluder>();
+    readonly List<Transform> allChars = new List<Transform>();   // todo mundo que anda pelo mapa
+
+    void BuildOccluders(SpriteRenderer bg)
+    {
+        var tex = bg.sprite.texture;
+        float ppu = bg.sprite.pixelsPerUnit;
+        float k = tex.width / 2752f;            // coordenadas da fase sao no desenho de 2752 px de largura
+        float scale = def.BgScale;
+        var root = new GameObject("Frente");
+        for (int i = 0; i < def.Occluders.GetLength(0); i++)
+        {
+            float x0 = def.Occluders[i, 0] * k, y0 = def.Occluders[i, 1] * k, x1 = def.Occluders[i, 2] * k, y1 = def.Occluders[i, 3] * k;
+            float b = def.Occluders[i, 4] * k;
+            // pecas na borda do mapa podem passar do desenho: corta no limite da textura
+            x0 = Mathf.Max(x0, 0f); y0 = Mathf.Max(y0, 0f); x1 = Mathf.Min(x1, tex.width); y1 = Mathf.Min(y1, tex.height);
+            float w = x1 - x0, h = y1 - y0;
+            if (w < 2f || h < 2f) continue;
+            var sprite = Sprite.Create(tex, new Rect(x0, tex.height - y1, w, h), new Vector2(0.5f, -(b - y1) / h), ppu);
+            var go = new GameObject("Frente" + i);
+            go.transform.SetParent(root.transform, false);
+            go.transform.position = new Vector3(((x0 + x1) / 2f - tex.width / 2f) / ppu * scale, (tex.height / 2f - b) / ppu * scale, 0f);
+            go.transform.localScale = Vector3.one * scale;
+            var sr = go.AddComponent<SpriteRenderer>();
+            sr.sprite = sprite;
+            sr.color = def.Tint;
+            sr.sortingOrder = CharOrder;
+            sr.spriteSortPoint = SpriteSortPoint.Pivot;   // ordena pela base do objeto, igual aos pes das pessoas
+            occluders.Add(new Occluder
+            {
+                sr = sr,
+                baseY = go.transform.position.y,
+                topY = (tex.height / 2f - y0) / ppu * scale,
+                x0 = (x0 - tex.width / 2f) / ppu * scale,
+                x1 = (x1 - tex.width / 2f) / ppu * scale,
+            });
+        }
+    }
+
+    static bool Behind(Occluder o, Vector2 feet) =>
+        feet.y > o.baseY && feet.y < o.topY && feet.x > o.x0 - 0.3f && feet.x < o.x1 + 0.3f;
+
+    // a crianca fica sempre por cima da multidao; atras de um objeto, o objeto fica meio transparente
+    void UpdateOccluders()
+    {
+        if (occluders.Count == 0 || player == null) return;
+        Vector2 pf = Feet(player);
+        foreach (var o in occluders)
+        {
+            bool p = Behind(o, pf);
+            bool someone = false;
+            if (!p)
+                foreach (var t in allChars)
+                {
+                    if (t == null || t == player) continue;
+                    Vector2 f = Feet(t);
+                    if (f.x < o.x0 - 0.3f || f.x > o.x1 + 0.3f) continue;
+                    if (Behind(o, f)) { someone = true; break; }
+                }
+            o.sr.sortingOrder = p ? 11 : CharOrder;
+            var c = def.Tint;
+            c.a = p ? 0.5f : someone ? 0.6f : 1f;
+            o.sr.color = c;
+        }
+    }
+
     // ---------------------------------------------------------------- roupas
+
+    static Sprite[] DressSafe(System.Func<Sprite[]> f)
+    {
+        try { return f(); }
+        catch (System.Exception e) { Debug.LogWarning("Recolor falhou: " + e.Message); return null; }
+    }
 
     static Sprite[] DressMom(float shirt, float skirt)
     {
         if (shirt < 0f && skirt < 0f) return null; // roupa original do desenho
-        try { return Recolor.Mom(shirt, skirt); }
-        catch (System.Exception e) { Debug.LogWarning("Recolor falhou: " + e.Message); return null; }
+        return DressSafe(() => Recolor.Mom(shirt, skirt));
     }
 
-    static readonly float[] Hues = { 0f, 25f, 50f, 90f, 125f, 180f, 210f, 250f, 280f, 320f, 345f };
+    static readonly float[] Hues = { 0f, 25f, 50f, 90f, 125f, 160f, 195f, 225f, 255f, 280f, 310f, 345f };
 
     static float HueGap(float a, float b) { float d = Mathf.Abs(Mathf.Repeat(a - b, 360f)); return Mathf.Min(d, 360f - d); }
 
-    static List<float> FarHues(float from)
+    static List<float> FarHues(float from, float gap)
     {
         var l = new List<float>();
-        foreach (var h in Hues) if (HueGap(h, from) >= 40f) l.Add(h);
+        foreach (var h in Hues) if (HueGap(h, from) >= gap) l.Add(h);
         return l;
     }
 
+    // variacoes das parecidas: (graus na blusa, graus na saia, cabelo). Sempre ha pelo menos uma peca com cor
+    // claramente diferente (30 graus ou mais), entao so a mamae tem aquela roupa.
+    static readonly Vector3[] LookVariants =
+    {
+        new Vector3(35f, 0f, 0f), new Vector3(-35f, 0f, 1f), new Vector3(0f, 35f, 2f), new Vector3(0f, -35f, 3f),
+        new Vector3(30f, 30f, 4f), new Vector3(-30f, -30f, 1f), new Vector3(50f, -30f, 2f), new Vector3(-50f, 30f, 0f),
+        new Vector3(40f, 0f, 3f), new Vector3(0f, 45f, 1f), new Vector3(-40f, 40f, 4f), new Vector3(60f, 0f, 2f),
+        new Vector3(0f, -50f, 0f), new Vector3(30f, -45f, 3f), new Vector3(-60f, 0f, 1f), new Vector3(45f, 45f, 2f),
+    };
+
     void DressLookalike(GameObject go, int i)
     {
-        // fases 1 e 2: blusa e saia diferentes; 3 e 4: mesma saia da mamae; 5: metade com a mesma blusa e saia diferente
-        float momShirt = def.MomShirt < 0f ? 345f : def.MomShirt;
-        float momSkirt = def.MomSkirt < 0f ? 225f : def.MomSkirt;
-        bool sameShirt = levelIndex >= 4 && i % 2 == 1;
-        bool sameSkirt = !sameShirt && levelIndex >= 2;
-        var shirts = FarHues(momShirt);
-        var skirts = FarHues(momSkirt);
-        float shirt = sameShirt ? def.MomShirt : shirts[(i * 5 + levelIndex) % shirts.Count];
-        float skirt = sameSkirt ? def.MomSkirt : skirts[(i * 3 + 1 + levelIndex) % skirts.Count];
-        var sprites = DressMom(shirt, skirt);
+        // parecida com a mamae, mas nunca igual: a blusa e/ou a saia tem outra cor proxima, e muitas vezes o cabelo muda
+        float ms = def.MomShirt < 0f ? 345f : def.MomShirt;
+        float mk = def.MomSkirt < 0f ? 225f : def.MomSkirt;
+        var lv = LookVariants[(i + hintSeed) % LookVariants.Length];
+        // se a mamae usa a cor original do desenho, a parecida tambem recolore a peca "igual" com a mesma cor base
+        float shirt = ms + lv.x, skirt = mk + lv.y;
+        int hair = (int)lv.z;
+        var sprites = DressSafe(() => Recolor.Mom(shirt, skirt, 1f, 1f, hair));
         if (sprites != null) go.GetComponent<DirectionalSprite>().Use(sprites);
-        else go.GetComponent<SpriteRenderer>().color = Color.HSVToRGB(Mathf.Max(shirt, 0f) / 360f, 0.35f, 1f);
+        else go.GetComponent<SpriteRenderer>().color = Color.HSVToRGB(Mathf.Repeat(shirt, 360f) / 360f, 0.5f, 1f);
     }
 
     // ---------------------------------------------------------------- grade de chao
@@ -413,7 +616,7 @@ public class LevelController : MonoBehaviour
             for (int i = 0; i < 40; i++) cands.Add(reachable[Random.Range(0, reachable.Count)]);
         cands.Sort((a, b) => dist[b.x, b.y].CompareTo(dist[a.x, a.y]));
         // fase 1: sorteia entre a metade mais longe; nas outras, entre as mais longe
-        float frac = new[] { 0.5f, 0.45f, 0.4f, 0.4f, 0.35f }[Mathf.Min(levelIndex, 4)];
+        float frac = new[] { 0.5f, 0.45f, 0.4f, 0.4f, 0.35f, 0.35f }[Mathf.Min(levelIndex, 5)];
         int n = Mathf.Max(1, Mathf.RoundToInt(cands.Count * frac));
         return CellCenter(cands[Random.Range(0, n)]);
     }
@@ -458,11 +661,11 @@ public class LevelController : MonoBehaviour
         return true;
     }
 
-    List<Vector2> RandomRoute(Vector2Int start)
+    List<Vector2> RandomRoute(Vector2Int start, int minPts = 2, int maxPts = 5)
     {
         // ronda de ida e volta entre pontos ligados em linha reta, sem atravessar paredes
         var pts = new List<Vector2> { CellCenter(start) };
-        int want = Random.Range(2, 5);
+        int want = Random.Range(minPts, maxPts);
         for (int i = 0; i < 80 && pts.Count < want; i++)
         {
             var last = pts[pts.Count - 1];
@@ -491,8 +694,8 @@ public class LevelController : MonoBehaviour
         // dica atual, logo abaixo da barra
         hintText = UIKit.Label(t, "", 11, Gold, new Vector2(0f, 1f), new Vector2(500, -66), new Vector2(980, 24), TextAnchor.MiddleLeft);
 
-        bannerPanel = UIKit.Panel(t, new Color(0, 0, 0, 0.8f), new Vector2(0.5f, 1f), new Vector2(-100, -110), new Vector2(860, 64));
-        bannerText = UIKit.Label(bannerPanel.transform, "", 14, Gold, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(840, 60));
+        bannerPanel = UIKit.Panel(t, new Color(0, 0, 0, 0.8f), new Vector2(0.5f, 1f), new Vector2(-100, -116), new Vector2(860, 76));
+        bannerText = UIKit.Label(bannerPanel.transform, "", 14, Gold, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(840, 72));
         bannerPanel.gameObject.SetActive(false);
 
         // minimapa: o cenario em miniatura, com a crianca, os totens e a lojinha (a mamae NAO aparece)
@@ -512,23 +715,20 @@ public class LevelController : MonoBehaviour
             new Vector2(0f, 0.5f), new Vector2(45, 0), new Vector2(80, 110)).preserveAspect = true;
         UIKit.Label(card.transform, "MAMAE:\n" + def.Outfit.Replace(" E ", "\nE "), 9, Pink, new Vector2(1f, 0.5f), new Vector2(-68, 0), new Vector2(130, 110));
 
-        // mapa grande (TAB): mostra os nomes dos lugares, mas nao a mamae
+        // mapa grande (TAB): mostra os nomes dos lugares (letra maior), mas nao a mamae
         bigMapRoot = UIKit.Panel(t, new Color(0, 0, 0, 0.85f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(2400, 1400)).gameObject;
-        var bs = def.Parts.Length > 1 ? Fit(990f, 590f) : Fit(990f, 552f);
+        var bs = Fit(1060f, 580f);
         var bigFrame = UIKit.Panel(bigMapRoot.transform, new Color(0.35f, 0.2f, 0.1f, 1f), new Vector2(0.5f, 0.5f), new Vector2(0, 14), bs + new Vector2(14, 14));
         bigMap = UIKit.Rect(bigFrame.transform, "Mapa", new Vector2(0.5f, 0.5f), Vector2.zero, bs);
         MapImage(bigMap);
-        int fs = def.Parts.Length > 1 ? 7 : 9;
+        const int fs = 12;
         for (int i = 0; i < def.PlaceNames.Length && !dif.Dark; i++)
         {
-            string nm = ShortName(def.PlaceNames[i]);
+            string nm = def.PlaceNames[i];
             var w = def.PlacePos[i];
-            var bg = UIKit.Panel(bigMap, new Color(0, 0, 0, 0.7f), new Vector2(0.5f, 0.5f), MapPos(bigMap, w), new Vector2(nm.Length * fs + 10, fs * 2));
-            UIKit.Label(bg.transform, nm, fs, Cream, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(nm.Length * fs + 10, fs * 2));
+            var bg = UIKit.Panel(bigMap, new Color(0, 0, 0, 0.78f), new Vector2(0.5f, 0.5f), MapPos(bigMap, w), new Vector2(nm.Length * fs + 12, fs * 2 + 2));
+            UIKit.Label(bg.transform, nm, fs, Cream, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(nm.Length * fs + 12, fs * 2 + 2));
         }
-        if (def.Parts.Length > 1)
-            for (int k = 0; k < def.Parts.Length; k++)
-                UIKit.Label(bigMap, def.PartNames[k], 12, Gold, new Vector2(0f, 1f), new Vector2(-70, -bs.y * (k + 0.5f) / def.Parts.Length), new Vector2(130, 24), TextAnchor.MiddleRight);
         foreach (var tt in totems) PlaceOn(bigMap, Dot(bigMap, new Color(0.2f, 0.7f, 1f), 12), tt.t.position);
         PlaceOn(bigMap, Dot(bigMap, ShopGreen, 14), shop.position);
         bigPlayer = Dot(bigMap, Gold, 16);
@@ -541,14 +741,54 @@ public class LevelController : MonoBehaviour
         overlay.gameObject.SetActive(false);
 
         // lojinha
-        shopRoot = UIKit.Panel(t, new Color(0.08f, 0.05f, 0.03f, 0.95f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(860, 540)).gameObject;
+        shopRoot = UIKit.Panel(t, new Color(0.08f, 0.05f, 0.03f, 0.96f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(900, 580)).gameObject;
         UIKit.Label(shopRoot.transform, "LOJINHA", 22, ShopGreen, new Vector2(0.5f, 1f), new Vector2(0, -35), new Vector2(800, 40));
-        shopText = UIKit.Label(shopRoot.transform, "", 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(0, -20), new Vector2(800, 360), TextAnchor.UpperLeft);
-        UIKit.Label(shopRoot.transform, "SETAS: ESCOLHER    ENTER: COMPRAR    ESC: SAIR", 10, Gold, new Vector2(0.5f, 0f), new Vector2(0, 28), new Vector2(800, 24));
+        shopText = UIKit.Label(shopRoot.transform, "", 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(0, -10), new Vector2(840, 440), TextAnchor.UpperLeft);
+        UIKit.Label(shopRoot.transform, "SETAS: ESCOLHER    ENTER: COMPRAR    ESC: SAIR", 10, Gold, new Vector2(0.5f, 0f), new Vector2(0, 26), new Vector2(800, 24));
         shopRoot.SetActive(false);
     }
 
-    // tamanho do mapa na tela mantendo a proporcao do mundo (fases 4 e 5 sao mais altas)
+    // chuva: gotas caindo e o vidro embacado por cima do jogo (abaixo do HUD)
+    void BuildRain()
+    {
+        if (!HasRain) return;
+        var canvas = UIKit.MakeCanvas("Chuva", 5);
+        rainRoot = canvas.gameObject;
+        fog = UIKit.Picture(canvas.transform, GenSprites.Fog, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(1500, 850));
+        fog.color = new Color(1f, 1f, 1f, 0f);
+        drops = new RectTransform[110];
+        for (int i = 0; i < drops.Length; i++)
+        {
+            var r = UIKit.Rect(canvas.transform, "Gota", new Vector2(0.5f, 0.5f), new Vector2(Random.Range(-700f, 700f), Random.Range(-420f, 420f)), new Vector2(2, Random.Range(14f, 26f)));
+            var im = r.gameObject.AddComponent<Image>();
+            im.color = new Color(0.75f, 0.85f, 1f, 0.55f);
+            im.raycastTarget = false;
+            r.localRotation = Quaternion.Euler(0, 0, -12f);
+            drops[i] = r;
+        }
+        rainRoot.SetActive(false);
+    }
+
+    void UpdateRain()
+    {
+        if (rainRoot == null) return;
+        bool raining = elapsed >= rainAt && elapsed < rainUntil;
+        if (!raining && fogAlpha <= 0.01f) { if (rainRoot.activeSelf) rainRoot.SetActive(false); return; }
+        rainRoot.SetActive(true);
+        // o vidro vai embacando aos poucos; com guarda-chuva nao embaca
+        float target = raining && !boughtUmbrella ? 1f : 0f;
+        fogAlpha = Mathf.MoveTowards(fogAlpha, target, Time.deltaTime * (target > fogAlpha ? 0.3f : 0.5f));
+        fog.color = new Color(1f, 1f, 1f, fogAlpha);
+        foreach (var d in drops)
+        {
+            d.gameObject.SetActive(raining);
+            var p = d.anchoredPosition + new Vector2(170f, -900f) * Time.deltaTime;
+            if (p.y < -440f) p = new Vector2(Random.Range(-760f, 640f), 440f);
+            d.anchoredPosition = p;
+        }
+    }
+
+    // tamanho do mapa na tela mantendo a proporcao do mundo
     Vector2 Fit(float maxW, float maxH)
     {
         float a = WorldW / WorldH;
@@ -569,14 +809,6 @@ public class LevelController : MonoBehaviour
             raw.color = dif.Dark ? new Color(0.03f, 0.03f, 0.05f) : new Color(def.Tint.r + 0.1f, def.Tint.g + 0.1f, def.Tint.b + 0.1f);
             raw.raycastTarget = false;
         }
-    }
-
-    // "PADARIA DO SHOPPING" vira "PADARIA" nas placas e no mapa grande (la ja da para ver em que parte fica)
-    static string ShortName(string s)
-    {
-        foreach (var suf in new[] { " DO MERCADO", " DO SHOPPING", " DO PARQUE" })
-            if (s.EndsWith(suf)) return s.Substring(0, s.Length - suf.Length);
-        return s;
     }
 
     static Sprite darkSprite;
@@ -627,29 +859,45 @@ public class LevelController : MonoBehaviour
         UIKit.Panel(t, new Color(0.05f, 0.03f, 0.02f, 0.96f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(2400, 1400));
         UIKit.Label(t, def.Title, 24, new Color(0.96f, 0.64f, 0.35f), new Vector2(0.5f, 1f), new Vector2(0, -50), new Vector2(1200, 50));
         UIKit.Label(t, GameSettings.ModeName(mode) + "  -  " + GameSettings.DifName(dif.Dif), 11, Gold, new Vector2(0.5f, 1f), new Vector2(0, -82), new Vector2(1200, 22));
+        var momPic = momSprites != null ? momSprites[6] : Resources.Load<Sprite>("Art/Mae/south");
+
+        // no modo historia, os avisos aparecem so na fase 1; depois so a roupa nova da mamae
+        if (mode == GameMode.Historia && levelIndex > 0)
+        {
+            UIKit.Label(t, "A MAMAE AGORA ESTA COM OUTRA ROUPA:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(0, 170), new Vector2(1000, 30));
+            UIKit.Picture(t, momPic, new Vector2(0.5f, 0.5f), new Vector2(0, 30), new Vector2(240, 240)).preserveAspect = true;
+            UIKit.Label(t, def.Outfit, 14, Cream, new Vector2(0.5f, 0.5f), new Vector2(0, -115), new Vector2(1000, 30));
+            UIKit.Label(t, "ENTER: COMECAR", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 55), new Vector2(1240, 40));
+            return;
+        }
+
         UIKit.Label(t, def.Story, 12, Cream, new Vector2(0.5f, 1f), new Vector2(0, -122), new Vector2(1240, 60));
+        UIKit.Label(t, "ESTA E A SUA MAMAE:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(-280, 160), new Vector2(500, 30));
+        UIKit.Picture(t, momPic, new Vector2(0.5f, 0.5f), new Vector2(-280, 60), new Vector2(170, 170)).preserveAspect = true;
+        UIKit.Label(t, def.Outfit, 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(-280, -36), new Vector2(500, 30));
 
-        UIKit.Label(t, "ESTA E A SUA MAMAE:", 15, Pink, new Vector2(0.5f, 0.5f), new Vector2(-280, 150), new Vector2(500, 30));
-        UIKit.Picture(t, momSprites != null ? momSprites[6] : Resources.Load<Sprite>("Art/Mae/south"),
-            new Vector2(0.5f, 0.5f), new Vector2(-280, 40), new Vector2(180, 180)).preserveAspect = true;
-        UIKit.Label(t, def.Outfit, 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(-280, -62), new Vector2(500, 30));
+        UIKit.Label(t, "VOCE E ESTA CRIANCA:", 15, Gold, new Vector2(0.5f, 0.5f), new Vector2(280, 160), new Vector2(500, 30));
+        UIKit.Picture(t, Resources.Load<Sprite>("Art/Crianca/south"), new Vector2(0.5f, 0.5f), new Vector2(280, 60), new Vector2(170, 170)).preserveAspect = true;
+        UIKit.Label(t, "COM CONTORNO AMARELO", 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(280, -36), new Vector2(500, 30));
 
-        UIKit.Label(t, "VOCE E ESTA CRIANCA:", 15, Gold, new Vector2(0.5f, 0.5f), new Vector2(280, 150), new Vector2(500, 30));
-        UIKit.Picture(t, Resources.Load<Sprite>("Art/Crianca/south"), new Vector2(0.5f, 0.5f), new Vector2(280, 40), new Vector2(180, 180)).preserveAspect = true;
-        UIKit.Label(t, "COM CONTORNO AMARELO", 11, Cream, new Vector2(0.5f, 0.5f), new Vector2(280, -62), new Vector2(500, 30));
-
+        bool story = mode == GameMode.Historia;
         var tips = new List<string>();
-        if (dif.Lookalikes > 0) tips.Add("CUIDADO: " + dif.Lookalikes + " MULHERES PARECIDAS COM A MAMAE! OLHE A ROUPA." +
+        tips.Add("CUIDADO: MULHERES COM ROUPA PARECIDA COM A DA MAMAE! OLHE BEM AS CORES." +
             (mode == GameMode.Livre ? "" : " ERRAR TIRA " + Difficulty.WrongMomPenalty + "s"));
+        if (dif.Kidnapper || story) tips.Add("MULHER MAIOR TODA DE PRETO" + (story ? " (A PARTIR DA FASE 2)" : "") + ": E UMA SEQUESTRADORA! FALAR COM ELA = PERDER");
+        if (dif.BigCops > 0 || story) tips.Add("POLICIAL GRANDAO DE BIGODE: SE TE PEGAR, TE LEVA PARA LONGE E VOCE FICA PRESO " + Difficulty.CaughtSeconds + "s");
+        tips.Add("SEGURANCAS: DA PARA PASSAR POR ELES, MAS ESBARRAR DEIXA VOCE LENTO POR " + Difficulty.HitSlowSeconds + "s");
+        if (dif.Totems > 1) tips.Add("TOTEM AZUL (i): CADA UM DA UMA DICA DIFERENTE DO QUE A MAMAE ESTAVA FAZENDO");
+        else if (dif.Totems == 1) tips.Add("SO TEM 1 TOTEM AZUL (i) DE DICA NO MAPA: ACHE ELE!");
+        else if (levelIndex == Levels.Count - 1) tips.Add("AQUI NAO TEM DICAS: TODO MUNDO PATINA RAPIDO, ALCANCE A MAMAE!");
+        else tips.Add("NESTA DIFICULDADE NAO TEM TOTEM DE DICA: OLHE BEM A ROUPA DA MAMAE!");
+        if (dif.Coins > 0) tips.Add("MOEDAS SAO POUCAS: GASTE BEM NA LOJINHA ($)");
+        if (dif.Events) tips.Add("A LUZ PODE ACABAR (USE A LANTERNA) E PODE CHOVER (USE O GUARDA-CHUVA)");
         if (dif.Dark) tips.Add("EXTRA HARD: ESTA TUDO ESCURO, VOCE SO ENXERGA EM VOLTA DE VOCE");
-        if (def.Parts.Length > 1) tips.Add("MAPA GRANDE: " + string.Join(" + ", def.PartNames) + ", LIGADOS POR CORREDORES");
-        tips.Add(dif.Guards + " SEGURANCAS: ESBARRAR DEIXA VOCE LENTO POR 1s");
-        tips.Add("TOTEM AZUL (i): APERTE E PARA GANHAR UMA DICA DE ONDE A MAMAE ESTA");
-        tips.Add("MOEDAS: GASTE NA LOJINHA ($) COM ESCUDO, TENIS, OCULOS" + (mode == GameMode.Livre ? "" : ", RELOGIO") + " E DICA");
         if (dif.MomMovesEvery > 0) tips.Add("A MAMAE MUDA DE LUGAR A CADA " + dif.MomMovesEvery + "s!");
         if (mode != GameMode.Livre) tips.Add("TEMPO: " + dif.Seconds + "s");
-        UIKit.Label(t, string.Join("\n", tips), 11, Cream, new Vector2(0.5f, 0f), new Vector2(0, 190), new Vector2(1220, 170));
-        UIKit.Label(t, "ENTER: COMECAR    WASD/SETAS: ANDAR    E: FALAR    TAB: MAPA    ESC: MENU", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 55), new Vector2(1240, 40));
+        UIKit.Label(t, string.Join("\n", tips), 10, Cream, new Vector2(0.5f, 0f), new Vector2(0, 190), new Vector2(1240, 220));
+        UIKit.Label(t, "ENTER: COMECAR    WASD/SETAS: ANDAR    E: FALAR    TAB: MAPA    ESC: MENU", 11, Gold, new Vector2(0.5f, 0f), new Vector2(0, 50), new Vector2(1240, 40));
     }
 
     void StartPlaying()
@@ -672,7 +920,7 @@ public class LevelController : MonoBehaviour
 
     public void Hit()
     {
-        if (state != State.Playing) return;
+        if (state != State.Playing || Disguised || pc.Frozen) return;
         if (shields > 0)
         {
             shields--;
@@ -686,58 +934,71 @@ public class LevelController : MonoBehaviour
         ShowBanner("ESBARRAO! VOCE FICOU LENTO", 1.2f);
     }
 
-    string HintText()
+    // o policial grandao pegou a crianca: leva para longe e ela fica presa uns segundos
+    public void Grab(Walker cop)
     {
-        // lugares com nome, do mais perto da mamae para o mais longe
-        var order = new List<int>();
-        for (int i = 0; i < def.PlaceNames.Length; i++) order.Add(i);
-        Vector2 m = mom.position;
-        order.Sort((a, b) => Vector2.Distance(def.PlacePos[a], m).CompareTo(Vector2.Distance(def.PlacePos[b], m)));
-        switch (dif.Dif)
+        if (state != State.Playing || Disguised || pc.Frozen) return;
+        if (shields > 0)
         {
-            case Dificuldade.Facil:
-                return "A MAMAE ESTA PERTO DE: " + def.PlaceNames[order[0]];
-            case Dificuldade.Normal:
-            {
-                // o lugar certo e mais um lugar longe dali, em ordem sorteada
-                int other = order[Random.Range(Mathf.Min(4, order.Count - 1), order.Count)];
-                bool swap = Random.value < 0.5f;
-                string a = def.PlaceNames[swap ? other : order[0]], b = def.PlaceNames[swap ? order[0] : other];
-                return "A MAMAE ESTA PERTO DE " + a + " OU DE " + b;
-            }
-            default:
-                return "A MAMAE ESTA " + RegionText(m);
+            shields--;
+            AudioManager.Sfx("confirmar");
+            ShowBanner("O ESCUDO TE PROTEGEU DO POLICIAL! (" + shields + " RESTANDO)", 1.6f);
+            cop.Hold(1.5f, false);
+            return;
         }
+        caught++;
+        hits++;
+        var c = RandomFarCell(9f, 3f, new List<Transform> { mom });
+        Vector2 to = FeetToPos(CellCenter(c));
+        pc.Teleport(to);
+        pc.Freeze(Difficulty.CaughtSeconds);
+        cop.Carry(to + Vector2.right * 0.75f, Difficulty.CaughtSeconds + 0.3f);
+        youMarkerUntil = Time.time + Difficulty.CaughtSeconds + 2f;
+        AudioManager.Sfx("esbarrao");
+        ShowBanner("O POLICIAL GRANDAO TE LEVOU PARA OUTRO LUGAR!\nVOCE FICA PRESO POR " + Difficulty.CaughtSeconds + "s", Difficulty.CaughtSeconds);
     }
 
-    // dificil e extra hard: so a regiao do mapa (e em qual cenario, nas fases 4 e 5)
-    string RegionText(Vector2 p)
+    // o que a mamae estava fazendo, a partir dos lugares mais perto dela
+    List<string> Hints()
     {
-        int k = Mathf.Clamp(Mathf.FloorToInt((WorldH / 2f - p.y) / LevelDef.PartH), 0, def.Parts.Length - 1);
-        float cy = WorldH / 2f - LevelDef.PartH * (k + 0.5f);
-        string side = p.x < -WorldW / 6f ? "NO LADO ESQUERDO" : p.x > WorldW / 6f ? "NO LADO DIREITO" : "NO MEIO";
-        string vert = p.y > cy ? "EM CIMA" : "EMBAIXO";
-        string part = def.Parts.Length > 1 ? "NO " + def.PartNames[k] + ", " : "";
-        return part + side + ", MAIS PARA " + (vert == "EM CIMA" ? "CIMA" : "BAIXO");
+        var order = new List<int>();
+        for (int i = 0; i < def.PlaceNames.Length; i++) order.Add(i);
+        Vector2 m = Feet(mom);
+        order.Sort((a, b) => Vector2.Distance(def.PlacePos[a], m).CompareTo(Vector2.Distance(def.PlacePos[b], m)));
+        string Act(int k) => def.PlaceActs[order[Mathf.Clamp(k, 0, order.Count - 1)]];
+        int far = order.Count - 1 - hintSeed % Mathf.Max(1, order.Count / 2);
+        string a = "A MAMAE ESTAVA " + Act(0);
+        string b = "PERTO DA MAMAE TINHA GENTE " + Act(1);
+        string c = "DE ONDE A MAMAE ESTAVA DAVA PARA VER GENTE " + Act(2);
+        string d = "A MAMAE NAO ESTAVA " + Act(far);
+        switch (dif.Dif)
+        {
+            case Dificuldade.Facil: return new List<string> { a, b, c, d };
+            case Dificuldade.Normal: return new List<string> { b, a, c, d };
+            default: return new List<string> { c, d, b, a };
+        }
     }
 
     void GiveHint()
     {
-        string h = HintText();
+        var list = Hints();
+        string h = list[hintNext % list.Count];
+        hintNext++;
         hintText.text = "DICA: " + h;
         AudioManager.Sfx("pista");
-        ShowBanner(h, 3.5f);
+        ShowBanner(h, 4f);
     }
 
     void Interact()
     {
         Vector2 pf = Feet(player);
         if (Vector2.Distance(Feet(mom), pf) < TalkDistance) { FoundMom(); return; }
+        if (kidnapper != null && Vector2.Distance(Feet(kidnapper), pf) < TalkDistance + 0.15f) { Kidnapped(); return; }
         if (Vector2.Distance(shop.position, pf) < TalkDistance + 0.2f) { OpenShop(); return; }
         foreach (var l in lookalikes)
             if (Vector2.Distance(Feet(l), pf) < TalkDistance)
             {
-                // falar com a mamae errada custa 3 segundos (uma vez por pessoa a cada 1,5s, para nao tirar varias vezes seguidas)
+                // falar com a mamae errada custa 3 segundos (no maximo uma vez a cada 1,5s)
                 if (Time.time < wrongMomUntil) return;
                 wrongMomUntil = Time.time + 1.5f;
                 mistakes++;
@@ -766,18 +1027,29 @@ public class LevelController : MonoBehaviour
     {
         shopItems = new List<ShopItem>
         {
-            new ShopItem { name = "ESCUDO", desc = "ESBARRAR NOS 2 PROXIMOS SEGURANCAS NAO ATRAPALHA", price = 3,
+            new ShopItem { name = "ESCUDO", desc = "OS 2 PROXIMOS ESBARROES NAO ATRAPALHAM (VALE CONTRA O POLICIAL GRANDAO)", price = 8,
                 owned = () => boughtShield, buy = () => { boughtShield = true; shields += 2; } },
-            new ShopItem { name = "TENIS", desc = "ANDA 30% MAIS RAPIDO", price = 4,
+            new ShopItem { name = "TENIS", desc = "ANDA 30% MAIS RAPIDO", price = 10,
                 owned = () => boughtShoes, buy = () => { boughtShoes = true; pc.speedBonus = 1.3f; } },
-            new ShopItem { name = "OCULOS", desc = "ENXERGA MAIS LONGE (A CAMERA ABRE)", price = 3,
-                owned = () => boughtGlasses, buy = () => { boughtGlasses = true; camSize += 1.1f; darkScale = 1.5f; } },
+            new ShopItem { name = "OCULOS", desc = "ENXERGA UM POUCO MAIS LONGE (A CAMERA ABRE)", price = 8,
+                owned = () => boughtGlasses, buy = () => { boughtGlasses = true; camSize += 0.8f; } },
         };
         if (mode != GameMode.Livre)
-            shopItems.Add(new ShopItem { name = "RELOGIO", desc = "+20 SEGUNDOS", price = 3,
-                owned = () => boughtClock, buy = () => { boughtClock = true; timeLeft += 20f; } });
-        shopItems.Add(new ShopItem { name = "DICA", desc = "DIZ PERTO DE QUE LUGAR A MAMAE ESTA", price = 2,
-            owned = () => boughtHint, buy = () => { boughtHint = true; GiveHint(); } });
+            shopItems.Add(new ShopItem { name = "RELOGIO", desc = "+15 SEGUNDOS", price = 10,
+                owned = () => boughtClock, buy = () => { boughtClock = true; timeLeft += 15f; } });
+        if (dif.Totems > 0)
+            shopItems.Add(new ShopItem { name = "DICA", desc = "MAIS UMA DICA DO QUE A MAMAE ESTAVA FAZENDO", price = 6,
+                owned = () => boughtHint, buy = () => { boughtHint = true; GiveHint(); } });
+        if (dif.Dark || HasBlackout)
+            shopItems.Add(new ShopItem { name = "LANTERNA", desc = "ENXERGA MAIS LONGE NO ESCURO" + (HasBlackout ? " (QUANDO A LUZ ACABAR)" : ""), price = 7,
+                owned = () => boughtLamp, buy = () => { boughtLamp = true; } });
+        if (HasRain)
+            shopItems.Add(new ShopItem { name = "GUARDA-CHUVA", desc = "QUANDO CHOVER, A TELA NAO EMBACA", price = 5,
+                owned = () => boughtUmbrella, buy = () => { boughtUmbrella = true; } });
+        shopItems.Add(new ShopItem { name = "DISFARCE", desc = "OS POLICIAIS E SEGURANCAS TE IGNORAM POR 15s", price = 12,
+            owned = () => boughtDisguise, buy = () => { boughtDisguise = true; disguiseUntil = Time.time + 15f; } });
+        shopItems.Add(new ShopItem { name = "MEGAFONE", desc = "A MAMAE RESPONDE E UMA SETA APONTA PARA ELA POR 4s", price = 15,
+            owned = () => boughtMegaphone, buy = () => { boughtMegaphone = true; arrowUntil = Time.time + 4f; } });
     }
 
     void OpenShop()
@@ -797,6 +1069,8 @@ public class LevelController : MonoBehaviour
         state = State.Playing;
         Time.timeScale = 1f;
         AudioManager.Sfx("voltar");
+        // o megafone so "grita" quando a crianca sai da lojinha
+        if (arrowUntil > Time.time) ShowBanner("MAMAE: \"FILHO, ESTOU AQUI!\"\nSIGA A SETA!", 3f);
     }
 
     void RefreshShop(string msg)
@@ -808,8 +1082,9 @@ public class LevelController : MonoBehaviour
             var it = shopItems[i];
             string mark = i == shopSel ? "> " : "  ";
             string price = it.owned() ? "COMPRADO" : it.price + " MOEDAS";
-            sb.Append(mark + it.name.PadRight(9) + price + "\n     " + it.desc + "\n\n");
+            sb.Append(mark + it.name.PadRight(14) + price + "\n");
         }
+        sb.Append("\n" + shopItems[shopSel].desc + "\n");
         if (msg != "") sb.Append("\n" + msg);
         shopText.text = sb.ToString();
     }
@@ -862,6 +1137,91 @@ public class LevelController : MonoBehaviour
         }
     }
 
+    // A sequestradora pega a crianca pela mao e as duas vao embora pela saida; a tela escurece e o jogo acaba.
+    void Kidnapped()
+    {
+        if (state != State.Playing) return;
+        state = State.Kidnap;
+        prompt.SetActive(false);
+        bigMapRoot.SetActive(false);
+        AudioManager.Sfx("derrota");
+        StartCoroutine(KidnapAnim());
+    }
+
+    static void SetPos(Transform t, Rigidbody2D rb, Vector2 p)
+    {
+        if (rb != null) rb.position = p;
+        t.position = new Vector3(p.x, p.y, t.position.z);
+    }
+
+    System.Collections.IEnumerator KidnapAnim()
+    {
+        pc.enabled = false;   // a crianca para de obedecer o controle
+        var w = kidnapper.GetComponent<Walker>();
+        if (w != null) w.enabled = false;
+        var krb = kidnapper.GetComponent<Rigidbody2D>();
+        var prb = player.GetComponent<Rigidbody2D>();
+        var kds = kidnapper.GetComponent<DirectionalSprite>();
+        var pds = player.GetComponent<DirectionalSprite>();
+        foreach (var col in player.GetComponents<Collider2D>()) col.enabled = false;
+        foreach (var col in kidnapper.GetComponents<Collider2D>()) col.enabled = false;
+        if (prb != null) { prb.linearVelocity = Vector2.zero; prb.bodyType = RigidbodyType2D.Kinematic; prb.interpolation = RigidbodyInterpolation2D.None; }
+        if (krb != null) krb.interpolation = RigidbodyInterpolation2D.None;
+        ShowBanner("A MULHER DE PRETO NAO ERA A MAMAE!\nELA PEGOU VOCE PELA MAO...", 8f);
+
+        // 1) ela vem para o lado da crianca
+        Vector2 kp = kidnapper.position;
+        Vector2 side = (Vector2)player.position + Vector2.right * 0.5f;
+        float t = 0f;
+        while (t < 0.6f)
+        {
+            t += Time.deltaTime;
+            if (kds != null) kds.Face(side - kp);
+            SetPos(kidnapper, krb, Vector2.Lerp(kp, side, t / 0.6f));
+            yield return null;
+        }
+        if (pds != null) pds.Face(Vector2.right);
+        if (kds != null) kds.Face(Vector2.left);
+        yield return new WaitForSeconds(0.7f);
+
+        // 2) as duas vao embora juntas, na direcao da entrada do parque, e a tela vai escurecendo
+        Vector2 start = player.position;
+        Vector2 gate = def.ChildSpawns[0] + Vector2.down * 3f;
+        Vector2 dir = (gate - start).sqrMagnitude > 0.01f ? (gate - start).normalized : Vector2.down;
+        const float speed = 2.2f, dur = 2.8f;
+        var fade = UIKit.MakeCanvas("Sequestro", 25);
+        var black = UIKit.Panel(fade.transform, new Color(0, 0, 0, 0), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(6000, 4000));
+        Vector3 ps = player.localScale, ks = kidnapper.localScale;
+        t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            Vector2 cp = (Vector2)player.position + dir * speed * Time.deltaTime;
+            SetPos(player, prb, cp);
+            SetPos(kidnapper, krb, cp + Vector2.right * 0.45f + dir * 0.12f);
+            if (pds != null) pds.Face(dir);
+            if (kds != null) kds.Face(dir);
+            // passinhos: sobe e desce um pouco
+            float bob = Mathf.Abs(Mathf.Sin(t * 12f)) * 0.05f;
+            player.localScale = new Vector3(ps.x, ps.y * (1f + bob), ps.z);
+            kidnapper.localScale = new Vector3(ks.x, ks.y * (1f + Mathf.Abs(Mathf.Sin(t * 12f + 1.5f)) * 0.05f), ks.z);
+            black.color = new Color(0, 0, 0, Mathf.Clamp01((t - 1.0f) / (dur - 1.0f)));
+            yield return null;
+        }
+        player.localScale = ps; kidnapper.localScale = ks;
+        Destroy(fade.gameObject);
+
+        state = State.Lost;
+        string why = "VOCE FOI SEQUESTRADO!\nA MULHER DE PRETO NAO ERA A MAMAE.\nA SUA TEM " + def.Outfit;
+        if (mode == GameMode.ContraOTempo)
+        {
+            bool rec = GameSettings.SaveRecord(mode, GameSettings.TotalScore);
+            End(why + "\n\nVOCE CHEGOU ATE A FASE " + (levelIndex + 1) + "\nTOTAL: " + GameSettings.TotalScore +
+                (rec ? "\nNOVO RECORDE!" : "\nRECORDE: " + GameSettings.Record(mode)), "R: COMECAR DE NOVO   M: MENU");
+        }
+        else End(why, "R: TENTAR DE NOVO   M: MENU");
+    }
+
     void TimeUp()
     {
         timeLeft = 0f;
@@ -893,6 +1253,7 @@ public class LevelController : MonoBehaviour
         mom.position = FeetToPos(PickMomSpot());
         momMoveAt = elapsed + dif.MomMovesEvery;
         hintText.text = "";
+        hintNext = 0;
         ShowBanner("A MAMAE MUDOU DE LUGAR! A DICA ANTIGA NAO VALE MAIS", 2.5f);
     }
 
@@ -927,12 +1288,18 @@ public class LevelController : MonoBehaviour
         if (state == State.Playing) Tick();
 
 #if UNITY_EDITOR && ENABLE_INPUT_SYSTEM
-        // atalhos so no editor, para testar: F2 pula para a proxima fase, F3 leva a crianca ate perto da mamae, F4 da 10 moedas
+        // atalhos so no editor, para testar: F2 proxima fase, F3 perto da mamae, F4 +10 moedas,
+        // F6 comeca o apagao, F7 comeca a chuva, F8 vai ate o policial grandao
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb != null && state == State.Playing)
         {
-            if (kb.f3Key.wasPressedThisFrame) player.position = mom.position + Vector3.left * 0.7f;
+            if (kb.f3Key.wasPressedThisFrame) pc.Teleport(mom.position + Vector3.left * 0.7f);
             if (kb.f4Key.wasPressedThisFrame) GameSettings.Coins += 10;
+            if (kb.f6Key.wasPressedThisFrame && HasBlackout) blackoutAt = elapsed;
+            if (kb.f7Key.wasPressedThisFrame && HasRain) rainAt = elapsed;
+            if (kb.f8Key.wasPressedThisFrame)
+                foreach (var w in FindObjectsByType<Walker>(FindObjectsSortMode.None))
+                    if (w.bigCop) { pc.Teleport(w.transform.position + Vector3.left * 1.2f); break; }
             if (kb.f2Key.wasPressedThisFrame && levelIndex < Levels.Count - 1) { NextLevel(); return; }
         }
 #endif
@@ -940,7 +1307,7 @@ public class LevelController : MonoBehaviour
         UpdateHud();
 
         // a tecla que terminou a fase (E) nao pode pular a tela de resultado no mesmo quadro
-        if (state == State.Playing || Time.frameCount == endedFrame) return;
+        if (state == State.Playing || state == State.Kidnap || Time.frameCount == endedFrame) return;
         if (state == State.Won && levelIndex < Levels.Count - 1 && Inp.Pressed(K.Enter)) NextLevel();
         else if (Inp.Pressed(K.Restart)) Restart();
         else if (Inp.Pressed(K.Menu)) { Time.timeScale = 1f; SceneManager.LoadScene("Menu"); }
@@ -957,6 +1324,28 @@ public class LevelController : MonoBehaviour
         }
         if (elapsed >= momMoveAt) MoveMom();
 
+        // apagao: 10 segundos de escuridao
+        if (elapsed >= blackoutAt && blackoutUntil < 0f)
+        {
+            blackoutUntil = elapsed + BlackoutSeconds;
+            darkness.gameObject.SetActive(true);
+            darkness.localScale = Vector3.one * 6f;
+            AudioManager.Sfx("esbarrao");
+            ShowBanner("A ENERGIA CAIU!" + (boughtLamp ? " SUA LANTERNA AJUDA." : ""), 3f);
+        }
+        if (blackoutUntil > 0f && elapsed >= blackoutUntil && darkness.gameObject.activeSelf && !dif.Dark)
+        {
+            darkness.gameObject.SetActive(false);
+            ShowBanner("A ENERGIA VOLTOU!", 1.5f);
+        }
+        // chuva
+        if (elapsed >= rainAt && rainUntil < 0f)
+        {
+            rainUntil = elapsed + RainSeconds;
+            ShowBanner("COMECOU A CHOVER!" + (boughtUmbrella ? " O GUARDA-CHUVA TE PROTEGE." : " A TELA VAI EMBACAR."), 2.5f);
+        }
+        UpdateRain();
+
         Vector2 pf = Feet(player);
         for (int i = coins.Count - 1; i >= 0; i--)
             if (Vector2.Distance(coins[i].position, pf) < 0.45f)
@@ -968,7 +1357,7 @@ public class LevelController : MonoBehaviour
                 AudioManager.Sfx("moeda");
             }
 
-        // "APERTE E" em cima de quem esta perto
+        // "APERTE E" so aparece em cima de quem esta perto
         Transform near = null;
         float best = TalkDistance;
         float lift = 0.8f;
@@ -978,6 +1367,11 @@ public class LevelController : MonoBehaviour
             float d = Vector2.Distance(Feet(l), pf);
             if (d < best) { best = d; near = l; lift = 0.8f; }
         }
+        if (kidnapper != null)
+        {
+            float d = Vector2.Distance(Feet(kidnapper), pf);
+            if (d < best + 0.15f && d < best) { best = d; near = kidnapper; lift = 1.0f; }
+        }
         foreach (var tt in totems)
         {
             if (tt.used) continue;
@@ -986,23 +1380,36 @@ public class LevelController : MonoBehaviour
         }
         float ds = Vector2.Distance(shop.position, pf);
         if (ds < TalkDistance + 0.2f && near != mom) { near = shop; lift = 2.1f; }
-        prompt.SetActive(near != null);
+        prompt.SetActive(near != null && !pc.Frozen);
         if (near != null) prompt.transform.position = (Vector2)near.position + Vector2.up * lift;
 
-        if (Inp.Pressed(K.Interact)) Interact();
+        if (Inp.Pressed(K.Interact) && !pc.Frozen) Interact();
     }
 
     void LateUpdate()
     {
+        UpdateOccluders();
         if (player == null) return;
-        cam.orthographicSize = Mathf.Lerp(cam.orthographicSize, camSize, 1f - Mathf.Exp(-4f * Time.unscaledDeltaTime));
-        if (darkness != null)
+        float k = 1f - Mathf.Exp(-4f * Time.unscaledDeltaTime);
+        cam.orthographicSize = Mathf.Lerp(cam.orthographicSize, camSize, k);
+        if (darkness != null && darkness.gameObject.activeSelf)
         {
+            // Extra Hard: raio normal; apagao: um pouco maior. A lanterna aumenta os dois.
+            float target = (dif.Dark ? 1f : BlackoutRadius / Difficulty.DarkRadius) * (boughtLamp ? 1.6f : 1f) * darkScale;
             darkness.position = new Vector3(player.position.x, player.position.y - FeetOffset * 0.5f, 0f);
-            darkness.localScale = Vector3.one * Mathf.Lerp(darkness.localScale.x, darkScale, 1f - Mathf.Exp(-4f * Time.unscaledDeltaTime));
+            darkness.localScale = Vector3.one * Mathf.Lerp(darkness.localScale.x, target, k);
         }
-        var target = new Vector3(player.position.x, player.position.y, -10);
-        cam.transform.position = Vector3.Lerp(cam.transform.position, target, 1f - Mathf.Exp(-8f * Time.unscaledDeltaTime));
+        // seta do megafone: em volta da crianca, apontando para a mamae
+        bool showArrow = Time.time < arrowUntil && state == State.Playing;
+        arrow.gameObject.SetActive(showArrow);
+        if (showArrow)
+        {
+            Vector2 dir = ((Vector2)mom.position - (Vector2)player.position).normalized;
+            arrow.position = (Vector2)player.position + dir * 1.1f;
+            arrow.rotation = Quaternion.Euler(0, 0, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
+        }
+        var target2 = new Vector3(player.position.x, player.position.y, -10);
+        cam.transform.position = Vector3.Lerp(cam.transform.position, target2, 1f - Mathf.Exp(-8f * Time.unscaledDeltaTime));
         ClampCamera();
     }
 
@@ -1026,9 +1433,17 @@ public class LevelController : MonoBehaviour
         if (shields > 0) items.Add("ESCUDO x" + shields);
         if (boughtShoes) items.Add("TENIS");
         if (boughtGlasses) items.Add("OCULOS");
+        if (boughtLamp) items.Add("LANTERNA");
+        if (boughtUmbrella) items.Add("GUARDA-CHUVA");
+        if (Disguised) items.Add("DISFARCE " + Mathf.CeilToInt(disguiseUntil - Time.time) + "s");
+        if (pc.Frozen) items.Add("PRESO " + Mathf.CeilToInt(pc.FrozenLeft) + "s");
+        if (blackoutUntil > 0f && elapsed < blackoutUntil && !dif.Dark) items.Add("SEM LUZ " + Mathf.CeilToInt(blackoutUntil - elapsed) + "s");
         rightText.text = GameSettings.ModeName(mode) + " - " + GameSettings.DifName(dif.Dif) + "   ESBARROES " + hits + "\n" + (items.Count > 0 ? string.Join(" ", items) + "   " : "") + "ESC: PAUSA";
         if (bannerPanel.gameObject.activeSelf && Time.unscaledTime > bannerUntil) bannerPanel.gameObject.SetActive(false);
         if (youMarker != null) youMarker.SetActive(state == State.Playing && Time.time < youMarkerUntil);
+        // disfarce: a crianca fica meio acinzentada
+        var psr = player.GetComponent<SpriteRenderer>();
+        psr.color = Disguised ? new Color(0.65f, 0.7f, 0.65f) : Color.white;
 
         PlaceOn(minimap, miniPlayer, player.position);
         PlaceOn(minimap, miniShop, shop.position);
@@ -1064,39 +1479,95 @@ public class PlayerController : MonoBehaviour
 {
     public float speed = 4.5f;
     public float speedBonus = 1f;
+    public float[,] ice;   // retangulos de gelo: ali a crianca escorrega
     Rigidbody2D rb;
     DirectionalSprite ds;
-    float slowUntil, slowFactor = 1f;
+    float slowUntil, slowFactor = 1f, frozenUntil;
+
+    public bool Frozen => Time.time < frozenUntil;
+    public float FrozenLeft => Mathf.Max(0f, frozenUntil - Time.time);
 
     void Awake() { rb = GetComponent<Rigidbody2D>(); ds = GetComponent<DirectionalSprite>(); }
 
     public void Slow(float seconds, float factor) { slowUntil = Time.time + seconds; slowFactor = factor; }
+    public void Freeze(float seconds) { frozenUntil = Time.time + seconds; rb.linearVelocity = Vector2.zero; }
+
+    public void Teleport(Vector2 pos)
+    {
+        rb.position = pos;
+        transform.position = pos;
+        rb.linearVelocity = Vector2.zero;
+        Physics2D.SyncTransforms();
+    }
+
+    bool OnIce()
+    {
+        if (ice == null) return false;
+        Vector2 f = rb.position + Vector2.down * 0.2f;
+        for (int i = 0; i < ice.GetLength(0); i++)
+            if (f.x >= ice[i, 0] && f.x <= ice[i, 2] && f.y >= ice[i, 1] && f.y <= ice[i, 3]) return true;
+        return false;
+    }
 
     void FixedUpdate()
     {
+        if (Frozen) { rb.linearVelocity = Vector2.zero; return; }
         var v = Inp.Move();
         float k = speedBonus * (Time.time < slowUntil ? slowFactor : 1f);
-        rb.linearVelocity = v * speed * k;
+        if (OnIce())
+        {
+            // no gelo: demora para acelerar, para e virar (escorrega), mas fica um pouco mais rapido
+            var want = v * speed * k * 1.15f;
+            rb.linearVelocity = Vector2.MoveTowards(rb.linearVelocity, want, (v.sqrMagnitude > 0.01f ? 5f : 2.2f) * Time.fixedDeltaTime);
+        }
+        else rb.linearVelocity = v * speed * k;
         if (v.sqrMagnitude > 0.01f) ds.Face(v);
     }
 }
 
-// Anda de ponto em ponto (ida e volta). Se for seguranca, esbarrar na crianca a deixa lenta.
+// Anda de ponto em ponto (ida e volta). Se for seguranca, esbarrar na crianca a deixa lenta;
+// se for o policial grandao, ele leva a crianca para longe.
 public class Walker : MonoBehaviour
 {
     public List<Vector2> route;
     public float speed = 1.5f;
     public LevelController level;
+    public bool bigCop;
     Rigidbody2D rb;
     DirectionalSprite ds;
     int idx = 1, dir = 1;
     float waitUntil, lastHit = -10f;
+    bool goHome;
 
     void Awake() { rb = GetComponent<Rigidbody2D>(); ds = GetComponent<DirectionalSprite>(); }
+
+    // para um pouco; se back, depois volta para a ronda
+    public void Hold(float seconds, bool back)
+    {
+        waitUntil = Time.time + seconds;
+        lastHit = Time.time + seconds;
+        goHome = back;
+    }
+
+    // leva a crianca: aparece ao lado dela, espera e depois volta para a ronda
+    public void Carry(Vector2 to, float seconds)
+    {
+        rb.position = to;
+        transform.position = to;
+        ds.Face(Vector2.left);
+        Hold(seconds, true);
+    }
 
     void FixedUpdate()
     {
         if (route == null || route.Count < 2 || Time.time < waitUntil) return;
+        if (goHome)
+        {
+            goHome = false;
+            rb.position = route[idx];
+            transform.position = route[idx];
+            return;
+        }
         Vector2 pos = rb.position, target = route[idx];
         if (Vector2.Distance(pos, target) < 0.08f)
         {
@@ -1109,19 +1580,70 @@ public class Walker : MonoBehaviour
         rb.MovePosition(Vector2.MoveTowards(pos, target, speed * Time.fixedDeltaTime));
     }
 
-    void OnCollisionEnter2D(Collision2D c) => Bump(c);
-    void OnCollisionStay2D(Collision2D c) => Bump(c);
+    void OnCollisionEnter2D(Collision2D c) => Bump(c.collider);
+    void OnCollisionStay2D(Collision2D c) => Bump(c.collider);
+    // segurancas e policiais sao atravessaveis (gatilho): a crianca passa, mas leva o efeito
+    void OnTriggerEnter2D(Collider2D c) => Bump(c);
+    void OnTriggerStay2D(Collider2D c) => Bump(c);
 
-    void Bump(Collision2D c)
+    void Bump(Collider2D c)
     {
-        if (c.collider.GetComponent<PlayerController>() == null) return;
-        // para um instante para nao empurrar a crianca contra a parede
-        waitUntil = Time.time + 1.2f;
-        if (level != null && Time.time - lastHit > 2f) { lastHit = Time.time; level.Hit(); }
+        if (c.GetComponent<PlayerController>() == null) return;
+        if (Time.time < waitUntil) return;
+        // para um instante quando encosta na crianca
+        waitUntil = Time.time + 0.6f;
+        if (level == null || Time.time - lastHit <= Difficulty.HitSlowSeconds + 0.5f) return;
+        lastHit = Time.time;
+        if (bigCop) level.Grab(this);
+        else level.Hit();
     }
 }
 
-// A mamae fica parada olhando em volta.
+// Patinador: da voltas na pista de gelo, rapido (a mamae tambem, na fase da pista).
+public class Skater : MonoBehaviour
+{
+    public Vector2[] loop;
+    public float speed = 2.5f, scale = 1f, feet = 0.2f;
+    DirectionalSprite ds;
+    Vector2 center;
+    float dist, total;
+    float[] seg;
+
+    void Start()
+    {
+        ds = GetComponent<DirectionalSprite>();
+        foreach (var p in loop) center += p;
+        center /= loop.Length;
+        seg = new float[loop.Length];
+        for (int i = 0; i < loop.Length; i++) { seg[i] = Vector2.Distance(P(i), P(i + 1)); total += seg[i]; }
+        dist = Random.value * total;
+        Place(0f);
+    }
+
+    Vector2 P(int i) => center + (loop[i % loop.Length] - center) * scale;
+
+    void Place(float dt)
+    {
+        dist = Mathf.Repeat(dist + speed * dt, total);
+        float d = dist;
+        for (int i = 0; i < seg.Length; i++)
+        {
+            if (d <= seg[i] || i == seg.Length - 1)
+            {
+                Vector2 a = P(i), b = P(i + 1);
+                Vector2 pos = Vector2.Lerp(a, b, seg[i] > 0f ? Mathf.Clamp01(d / seg[i]) : 0f);
+                transform.position = pos + Vector2.up * feet;
+                if (dt > 0f) ds.Face((b - a).normalized);
+                return;
+            }
+            d -= seg[i];
+        }
+    }
+
+    void Update() { Place(Time.deltaTime); }
+}
+
+// Fica parada olhando em volta (a mamae e quem esta parado na multidao).
 public class IdleLookAround : MonoBehaviour
 {
     static readonly Vector2[] Dirs = { Vector2.down, Vector2.left, Vector2.right, new Vector2(-1, -1), new Vector2(1, -1), Vector2.up };

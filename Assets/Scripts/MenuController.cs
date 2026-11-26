@@ -64,11 +64,9 @@ public class MenuController : MonoBehaviour
         onBack = ShowMain;
         Build(
             new Row { text = () => "HISTORIA", confirm = () => ShowDifficulty(GameMode.Historia),
-                desc = "5 FASES, CADA UMA MAIS DIFICIL E COM MAPA MAIOR. PERDEU? TENTA A FASE DE NOVO." },
+                desc = "6 FASES, CADA UMA COM UM MAPA NOVO E MAIOR. PERDEU? TENTA A FASE DE NOVO." },
             new Row { text = () => "CONTRA O TEMPO", confirm = () => ShowDifficulty(GameMode.ContraOTempo),
-                desc = "MENOS TEMPO NAS 5 FASES. SE O TEMPO ACABAR, RECOMECA DA FASE 1." },
-            new Row { text = () => "LIVRE", confirm = () => ShowDifficulty(GameMode.Livre),
-                desc = "SEM CRONOMETRO: EXPLORE AS 5 FASES COM CALMA." },
+                desc = "MENOS TEMPO NAS 6 FASES. SE O TEMPO ACABAR, RECOMECA DA FASE 1." },
             new Row { text = () => "VOLTAR", confirm = ShowMain });
     }
 
@@ -78,11 +76,11 @@ public class MenuController : MonoBehaviour
         string clock = m == GameMode.Livre ? "" : "MAIS TEMPO, ";
         Build(
             new Row { text = () => "FACIL", confirm = () => Play(m, Dificuldade.Facil),
-                desc = clock + "POUCAS MULHERES PARECIDAS E A DICA DIZ O LUGAR CERTO." + RecordText(m, Dificuldade.Facil) },
+                desc = clock + "POUCAS MULHERES PARECIDAS, SEM APAGAO NEM CHUVA. AS DICAS COMECAM PELA MAIS CLARA." + RecordText(m, Dificuldade.Facil) },
             new Row { text = () => "NORMAL", confirm = () => Play(m, Dificuldade.Normal),
-                desc = "MAIS MULHERES PARECIDAS. A DICA DA DOIS LUGARES: SO UM E O CERTO." + RecordText(m, Dificuldade.Normal) },
+                desc = "MAIS MULHERES PARECIDAS. PODE FALTAR LUZ OU COMECAR A CHOVER." + RecordText(m, Dificuldade.Normal) },
             new Row { text = () => "DIFICIL", confirm = () => Play(m, Dificuldade.Dificil),
-                desc = (m == GameMode.Livre ? "" : "MENOS TEMPO, ") + "MUITAS MAMAES PARECIDAS. A DICA SO DIZ A REGIAO DO MAPA." + RecordText(m, Dificuldade.Dificil) },
+                desc = (m == GameMode.Livre ? "" : "MENOS TEMPO, ") + "MUITAS MAMAES PARECIDAS. AS DICAS COMECAM PELAS MAIS VAGAS." + RecordText(m, Dificuldade.Dificil) },
             new Row { text = () => "EXTRA HARD (NO ESCURO)", confirm = () => Play(m, Dificuldade.ExtraHard),
                 desc = "COMO O DIFICIL, MAS TUDO FICA ESCURO: VOCE SO ENXERGA POUCOS PASSOS EM VOLTA." + RecordText(m, Dificuldade.ExtraHard) },
             new Row { text = () => "VOLTAR", confirm = ShowModes });

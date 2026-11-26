@@ -28,7 +28,7 @@ public static class GameSettings
     }
     public const float TimeLimit = 90f;
 
-    // Partida em andamento: fase atual (0 a 4), pontos acumulados e moedas na carteira
+    // Partida em andamento: fase atual (0 a 5), pontos acumulados e moedas na carteira
     // (as moedas passam de uma fase para a outra e sao gastas na lojinha).
     public static int Level = 0;
     public static int TotalScore = 0;
@@ -54,35 +54,52 @@ public static class GameSettings
     }
 }
 
-// Quanto cada fase e mais dificil: mais NPCs, mapas maiores (fases 4 e 5), camera mais fechada.
-// A dificuldade escolhida no menu muda o tempo, quantas mulheres parecidas com a mamae aparecem e o quanto a dica ajuda.
+// Quanto cada fase e mais dificil: mais gente, mapas maiores, camera mais fechada.
+// A dificuldade escolhida no menu muda o tempo, quantas mulheres parecidas com a mamae aparecem e a ordem das dicas.
 public struct Difficulty
 {
-    public int Guards, Lookalikes, Coins, Totems;
+    public int Guards, Lookalikes, Coins, Totems, Crowd, BigCops;
     public float GuardSpeed, CameraSize, Seconds, MomMovesEvery;
+    public bool Kidnapper, Events;
     public Dificuldade Dif;
     public bool Dark => Dif == Dificuldade.ExtraHard;
-    public const float HitSlowSeconds = 1f, HitSlowFactor = 0.4f;
+    public const float HitSlowSeconds = 2.5f, HitSlowFactor = 0.4f;   // esbarrar num seguranca: fica lento por mais tempo
     public const float WrongMomPenalty = 3f;   // segundos perdidos ao falar com a mamae errada
     public const float DarkRadius = 2.1f;      // no Extra Hard, quanto a crianca enxerga em volta (unidades)
+    public const float CaughtSeconds = 5f;     // tempo preso quando o policial grandao pega a crianca
+
+    // FACIL: varios totens; NORMAL: so 1 totem de dica; DIFICIL e EXTRA HARD: sem totens.
+    // Pista de gelo (ultima fase): sem dicas em nenhuma dificuldade.
+    static int TotemsBy(int level, Dificuldade dif)
+    {
+        if (level >= 5) return 0;
+        if (dif == Dificuldade.Facil) return new[] { 3, 3, 3, 3, 4 }[level];
+        if (dif == Dificuldade.Normal) return 1;
+        return 0;
+    }
 
     public static Difficulty For(int level, GameMode mode, Dificuldade dif)
     {
-        level = Mathf.Clamp(level, 0, 4);
+        level = Mathf.Clamp(level, 0, 5);
         int di = (int)dif;
+        bool easy = dif == Dificuldade.Facil;
         var d = new Difficulty
         {
             Dif = dif,
-            Guards = new[] { 3, 4, 5, 8, 10 }[level] + (dif == Dificuldade.Facil ? -1 : 0),
-            Lookalikes = new[] { 2, 3, 4, 6, 8 }[level] + new[] { 0, 2, 4, 4 }[di],
-            Coins = new[] { 10, 12, 14, 20, 26 }[level],
-            Totems = new[] { 3, 3, 2, 3, 4 }[level],
-            GuardSpeed = new[] { 1.3f, 1.4f, 1.5f, 1.6f, 1.7f }[level],
-            CameraSize = new[] { 4.4f, 4.2f, 4.0f, 3.9f, 3.8f }[level],
-            MomMovesEvery = dif == Dificuldade.Facil ? 0f : new[] { 0f, 0f, 0f, 60f, 60f }[level],
+            Guards = new[] { 3, 4, 4, 5, 6, 6 }[level] + (easy ? -1 : 0),
+            Lookalikes = (new[] { 2, 3, 4, 5, 6, 7 }[level] + new[] { 0, 2, 4, 4 }[di]) * 3,   // 3x mais mamaes parecidas
+            Coins = new[] { 6, 7, 8, 9, 10, 0 }[level],   // ultima fase: sem moedas (nao tem loja)
+            Totems = TotemsBy(level, dif),   // pista de gelo: sem dicas, o desafio e alcancar a mamae
+            Crowd = new[] { 12, 16, 20, 26, 32, 40 }[level] + (easy ? -4 : 0),
+            BigCops = new[] { 0, 1, 1, 1, 2, 2 }[level] + 2 + new[] { 0, 0, 1, 2 }[di],   // +2 em toda fase, mais no dificil
+            Kidnapper = level >= 1,
+            Events = !easy,   // apagao (lugares fechados) e chuva (lugares abertos)
+            GuardSpeed = new[] { 1.3f, 1.4f, 1.5f, 1.6f, 1.7f, 1.7f }[level],
+            CameraSize = new[] { 3.4f, 3.3f, 3.2f, 3.1f, 3.0f, 3.0f }[level],
+            MomMovesEvery = easy ? 0f : new[] { 0f, 0f, 0f, 60f, 60f, 0f }[level],
         };
-        // tempo base (NORMAL, HISTORIA); as fases 4 e 5 tem mapas 2x e 3x maiores
-        float t = new[] { 70f, 75f, 80f, 100f, 125f }[level];
+        // tempo base (NORMAL, HISTORIA): os mapas crescem a cada fase
+        float t = new[] { 70f, 75f, 85f, 95f, 110f, 120f }[level];
         t *= new[] { 1.3f, 1f, 0.8f, 1f }[di];
         if (mode == GameMode.ContraOTempo) t *= 0.85f;
         d.Seconds = Mathf.Round(t / 5f) * 5f;
@@ -243,19 +260,68 @@ public static class GenSprites
     }, 20, new Vector2(0.5f, 0.05f));
 
     public static Sprite White => white ??= Make(4, 4, (x, y) => Color.white, 4, new Vector2(0.5f, 0.5f));
+
+    // seta do megafone (aponta para a direita; o jogo gira)
+    static Sprite arrow, fog;
+    public static Sprite Arrow => arrow ??= Make(20, 13, (x, y) =>
+    {
+        float cy = 6f, d = Mathf.Abs(y - cy);
+        bool head = x >= 10 && d <= (19 - x) * 0.65f;
+        bool tail = x < 11 && d <= 1.6f;
+        bool inner = (x >= 11 && d <= (18 - x) * 0.65f - 1f) || (x >= 1 && x < 12 && d <= 0.6f);
+        if (inner) return new Color(1f, 0.45f, 0.75f);
+        if (head || tail) return new Color(0.2f, 0.05f, 0.12f);
+        return Color.clear;
+    }, 16, new Vector2(0.5f, 0.5f));
+
+    // vidro embacado: nevoa irregular com gotas
+    public static Sprite Fog => fog ??= MakeFog();
+    static Sprite MakeFog()
+    {
+        const int w = 320, h = 180;
+        var px = new Color[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                float n = Mathf.PerlinNoise(x * 0.025f, y * 0.025f) * 0.6f + Mathf.PerlinNoise(x * 0.09f + 30f, y * 0.09f) * 0.4f;
+                px[y * w + x] = new Color(0.86f, 0.9f, 0.94f, Mathf.Lerp(0.82f, 0.98f, n));   // bem embacado
+            }
+        var rnd = new System.Random(7);
+        for (int i = 0; i < 260; i++)
+        {
+            int cx = rnd.Next(w), cy = rnd.Next(h);
+            float r = 1.5f + (float)rnd.NextDouble() * 4f;
+            for (int y = (int)(cy - r - 1); y <= cy + r + 1; y++)
+                for (int x = (int)(cx - r - 1); x <= cx + r + 1; x++)
+                {
+                    if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                    float d = Vector2.Distance(new Vector2(x, y), new Vector2(cx, cy));
+                    if (d > r) continue;
+                    // gota: centro limpo (da para ver atras) e borda mais clara
+                    px[y * w + x] = d > r - 1.2f ? new Color(1f, 1f, 1f, 0.95f) : new Color(0.8f, 0.88f, 0.95f, 0.45f);
+                }
+        }
+        var t = new Texture2D(w, h, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+        t.SetPixels(px);
+        t.Apply();
+        return Sprite.Create(t, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), 100);
+    }
 }
 
-// Troca a cor da blusa (e da saia) da mamae para criar as "mulheres parecidas".
+// Troca as cores dos desenhos dos personagens em tempo de jogo:
+// roupas das "mulheres parecidas", da multidao, da sequestradora e o policial grandao (cabelo curto e bigode).
 public static class Recolor
 {
     static readonly Dictionary<string, Sprite[]> cache = new Dictionary<string, Sprite[]>();
 
-    // shirtHue/skirtHue em graus (0-360); valor < 0 mantem a cor original daquela peca
-    public static Sprite[] Mom(float shirtHue, float skirtHue)
+    // px: pixels do recorte (linha 0 = embaixo), w x h; dir: 0 leste, 2 norte, 4 oeste, 6 sul (ordem do DirectionalSprite)
+    public delegate void PixelFn(Color[] px, int w, int h, int dir);
+
+    public static Sprite[] Make(string folder, string key, PixelFn fn)
     {
-        string key = shirtHue + "/" + skirtHue;
+        key = folder + ":" + key;
         if (cache.TryGetValue(key, out var done)) return done;
-        var src = DirectionalSprite.LoadAll("Mae");
+        var src = DirectionalSprite.LoadAll(folder);
         var outp = new Sprite[src.Length];
         for (int i = 0; i < src.Length; i++)
         {
@@ -269,15 +335,7 @@ public static class Recolor
             Color[] px;
             try { px = s.texture.GetPixels(x0, y0, w, h); }
             catch { return null; } // imagem ainda nao legivel: quem chamou usa so uma cor por cima
-            for (int k = 0; k < px.Length; k++)
-            {
-                var c = px[k];
-                if (c.a <= 0f) continue;
-                Color.RGBToHSV(c, out float hu, out float sat, out float v);
-                float deg = hu * 360f;
-                if (shirtHue >= 0f && deg >= 335f && sat > 0.3f) px[k] = Shift(c, shirtHue, sat, v);
-                else if (skirtHue >= 0f && deg >= 210f && deg <= 245f && sat > 0.15f) px[k] = Shift(c, skirtHue, sat, v);
-            }
+            fn(px, w, h, i);
             var tex = new Texture2D(w, h, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp };
             tex.SetPixels(px);
             tex.Apply();
@@ -291,11 +349,224 @@ public static class Recolor
         return outp;
     }
 
-    static Color Shift(Color c, float hueDeg, float sat, float v)
+    static void Hsv(Color c, out float deg, out float sat, out float v)
     {
-        var n = Color.HSVToRGB(Mathf.Repeat(hueDeg, 360f) / 360f, Mathf.Max(sat, 0.45f), v);
+        Color.RGBToHSV(c, out float hu, out sat, out v);
+        deg = hu * 360f;
+    }
+
+    // val < 1 escurece a peca (val baixo = quase preto, sem cor)
+    static Color Shift(Color c, float hueDeg, float sat, float v, float val = 1f)
+    {
+        float s = val < 0.6f ? 0.12f : Mathf.Max(sat, 0.75f);   // cores vivas: fica mais facil ver a diferenca
+        var n = Color.HSVToRGB(Mathf.Repeat(hueDeg, 360f) / 360f, s, Mathf.Clamp01(v * val));
         n.a = c.a;
         return n;
+    }
+
+    // cores de cabelo: 0 original (castanho), 1 loiro, 2 preto, 3 ruivo, 4 grisalho
+    static readonly Vector3[] HairLook = { Vector3.zero, new Vector3(42f, 0.55f, 1.7f), new Vector3(20f, 0.15f, 0.45f), new Vector3(12f, 0.85f, 1.25f), new Vector3(30f, 0.08f, 1.6f) };
+
+    static bool MomHair(float deg, float sat, float v) => (deg <= 25f || deg >= 345f) && sat > 0.45f && v > 0.12f && v < 0.6f;
+
+    // shirtHue/skirtHue em graus (0-360); valor < 0 mantem a cor original daquela peca; hair: ver HairLook
+    public static Sprite[] Mom(float shirtHue, float skirtHue, float shirtVal = 1f, float skirtVal = 1f, int hair = 0)
+    {
+        return Make("Mae", shirtHue + "/" + skirtHue + "/" + shirtVal + "/" + skirtVal + "/" + hair, (px, w, h, dir) =>
+        {
+            for (int k = 0; k < px.Length; k++)
+            {
+                var c = px[k];
+                if (c.a <= 0f) continue;
+                Hsv(c, out float deg, out float sat, out float v);
+                if (shirtHue >= 0f && deg >= 335f && sat > 0.3f) px[k] = Shift(c, shirtHue, sat, v, shirtVal);
+                else if (skirtHue >= 0f && deg >= 210f && deg <= 245f && sat > 0.15f) px[k] = Shift(c, skirtHue, sat, v, skirtVal);
+                else if (hair > 0 && hair < HairLook.Length && MomHair(deg, sat, v))
+                {
+                    var hl = HairLook[hair];
+                    var n = Color.HSVToRGB(hl.x / 360f, hl.y, Mathf.Clamp01(v * hl.z));
+                    n.a = c.a;
+                    px[k] = n;
+                }
+            }
+        });
+    }
+
+    // crianca da multidao: blusa (azul claro) e calca (azul escuro) com outras cores
+    public static Sprite[] Kid(float shirtHue, float pantsHue)
+    {
+        return Make("Crianca", shirtHue + "/" + pantsHue, (px, w, h, dir) =>
+        {
+            for (int k = 0; k < px.Length; k++)
+            {
+                var c = px[k];
+                if (c.a <= 0f) continue;
+                Hsv(c, out float deg, out float sat, out float v);
+                if (deg < 195f || deg > 250f || sat <= 0.15f) continue;
+                px[k] = v >= 0.45f ? Shift(c, shirtHue, sat, v) : Shift(c, pantsHue, sat, v, 1.15f);
+            }
+        });
+    }
+
+    // homem da multidao: o desenho do policial sem farda (bone e camisa coloridos), de cabelo curto
+    public static Sprite[] Man(float shirtHue, float pantsHue, bool beard)
+    {
+        return Make("Policial", "civil/" + shirtHue + "/" + pantsHue + "/" + beard, (px, w, h, dir) =>
+        {
+            Bounds(px, w, h, out int bot, out int top);
+            for (int k = 0; k < px.Length; k++)
+            {
+                var c = px[k];
+                if (c.a <= 0f) continue;
+                Hsv(c, out float deg, out float sat, out float v);
+                if (deg < 195f || deg > 250f || sat <= 0.2f) continue;
+                float ry = (k / w - bot) / (float)Mathf.Max(1, top - bot);
+                px[k] = ry < 0.3f ? Shift(c, pantsHue, sat, v, 1.25f) : Shift(c, shirtHue, sat, Mathf.Min(1f, v * 1.9f));
+            }
+            ShortHair(px, w, h);
+            if (beard) Mustache(px, w, h, dir);
+        });
+    }
+
+    // sequestradora: roupa toda preta, capuz escuro no lugar do cabelo e oculos escuros
+    public static Sprite[] Kidnapper()
+    {
+        return Make("Mae", "sequestradora", (px, w, h, dir) =>
+        {
+            for (int k = 0; k < px.Length; k++)
+            {
+                var c = px[k];
+                if (c.a <= 0f) continue;
+                Hsv(c, out float deg, out float sat, out float v);
+                if (deg >= 335f && sat > 0.3f) px[k] = Shift(c, 0f, sat, v, 0.28f);
+                else if (deg >= 210f && deg <= 245f && sat > 0.15f) px[k] = Shift(c, 0f, sat, v, 0.3f);
+                else if (MomHair(deg, sat, v) || (!IsSkin(c) && (deg <= 40f || deg >= 345f) && sat > 0.45f && v > 0.12f))
+                { var n = Color.HSVToRGB(0f, 0.05f, v * 0.42f); n.a = c.a; px[k] = n; }   // capuz escuro, sem reflexo laranja
+            }
+            Sunglasses(px, w, h, dir);
+        });
+    }
+
+    static bool IsSkin(Color c)
+    {
+        if (c.a <= 0.5f) return false;
+        Hsv(c, out float deg, out float sat, out float v);
+        return deg > 7f && deg < 32f && sat > 0.2f && sat < 0.6f && v > 0.75f;
+    }
+
+    // oculos escuros: acha a linha dos olhos (pontos escuros no meio da pele do rosto) e pinta uma faixa preta
+    static void Sunglasses(Color[] px, int w, int h, int dir)
+    {
+        if (dir == 1 || dir == 2 || dir == 3) return; // de costas nao aparece o rosto
+        Bounds(px, w, h, out int bot, out int top);
+        int bestRow = -1, bestN = 0;
+        for (int y = bot + (top - bot) / 2; y <= top; y++)
+        {
+            int n = 0;
+            for (int x = 1; x < w - 1; x++)
+            {
+                var c = px[y * w + x];
+                Hsv(c, out _, out _, out float v);
+                if (c.a > 0.5f && v < 0.35f && (IsSkin(px[y * w + x - 1]) || IsSkin(px[y * w + x + 1]))) n++;
+            }
+            if (n > bestN) { bestN = n; bestRow = y; }
+        }
+        if (bestRow < 0 || bestN < 2) return;
+        var black = new Color(0.06f, 0.06f, 0.08f, 1f);
+        for (int y = bestRow - 1; y <= bestRow; y++)
+        {
+            if (y < 0) continue;
+            int minX = w, maxX = -1;
+            for (int x = 0; x < w; x++) if (IsSkin(px[y * w + x]) || (px[y * w + x].a > 0.5f && x > 0 && x < w - 1 && IsSkin(px[y * w + x - 1]) && IsSkin(px[y * w + x + 1]))) { minX = Mathf.Min(minX, x); maxX = Mathf.Max(maxX, x); }
+            for (int x = minX; x <= maxX; x++) if (px[y * w + x].a > 0.5f) px[y * w + x] = black;
+        }
+    }
+
+    // policial grandao: farda igual, cabelo curto e escuro, bigode
+    public static Sprite[] BigCop()
+    {
+        return Make("Policial", "grandao", (px, w, h, dir) =>
+        {
+            ShortHair(px, w, h);
+            Mustache(px, w, h, dir);
+        });
+    }
+
+    static void Bounds(Color[] px, int w, int h, out int bot, out int top)
+    {
+        bot = h; top = 0;
+        for (int k = 0; k < px.Length; k++)
+            if (px[k].a > 0.5f) { int y = k / w; if (y < bot) bot = y; if (y > top) top = y; }
+        if (bot > top) { bot = 0; top = h - 1; }
+    }
+
+    static bool IsHair(Color c)
+    {
+        if (c.a <= 0.5f) return false;
+        Hsv(c, out float deg, out float sat, out float v);
+        return (deg <= 25f || deg >= 345f) && sat > 0.45f && v < 0.5f && v > 0.12f;
+    }
+
+    static bool IsLine(Color c) { Hsv(c, out _, out _, out float v); return c.a > 0.5f && v < 0.13f; }
+
+    // corta o cabelo comprido (tudo que e cabelo abaixo da altura das orelhas) e refaz o contorno preto
+    static void ShortHair(Color[] px, int w, int h)
+    {
+        Bounds(px, w, h, out int bot, out int top);
+        float cut = bot + (top - bot) * 0.74f;
+        var removed = new bool[px.Length];
+        for (int k = 0; k < px.Length; k++)
+            if (k / w < cut && IsHair(px[k])) { removed[k] = true; px[k] = Color.clear; }
+        bool Body(int x, int y) => x >= 0 && y >= 0 && x < w && y < h && px[y * w + x].a > 0.5f && !IsLine(px[y * w + x]);
+        // contorno que ficou solto no ar
+        var drop = new List<int>();
+        for (int k = 0; k < px.Length; k++)
+        {
+            if (!IsLine(px[k])) continue;
+            int x = k % w, y = k / w;
+            if (!Body(x + 1, y) && !Body(x - 1, y) && !Body(x, y + 1) && !Body(x, y - 1)) drop.Add(k);
+        }
+        foreach (var k in drop) px[k] = Color.clear;
+        // contorno novo em volta de onde o cabelo saiu
+        var line = new Color(0.1f, 0.08f, 0.08f, 1f);
+        var add = new List<int>();
+        for (int k = 0; k < px.Length; k++)
+        {
+            if (!removed[k] || px[k].a > 0.5f) continue;
+            int x = k % w, y = k / w;
+            if (Body(x + 1, y) || Body(x - 1, y) || Body(x, y + 1) || Body(x, y - 1)) add.Add(k);
+        }
+        foreach (var k in add) px[k] = line;
+        // o cabelo que sobrou fica bem escuro
+        for (int k = 0; k < px.Length; k++)
+            if (IsHair(px[k])) { var c = px[k]; px[k] = new Color(c.r * 0.55f, c.g * 0.55f, c.b * 0.55f, c.a); }
+    }
+
+    // bigode: so quando o rosto aparece (de frente ou de lado para baixo)
+    static void Mustache(Color[] px, int w, int h, int dir)
+    {
+        if (dir != 5 && dir != 6 && dir != 7) return;
+        Bounds(px, w, h, out int bot, out int top);
+        int low = h, minX = w, maxX = -1;
+        var skin = new bool[px.Length];
+        for (int k = 0; k < px.Length; k++)
+        {
+            var c = px[k];
+            if (c.a <= 0.5f) continue;
+            float ry = (k / w - bot) / (float)Mathf.Max(1, top - bot);
+            if (ry <= 0.42f || ry >= 0.66f) continue;
+            Hsv(c, out float deg, out float sat, out float v);
+            if (deg > 7f && deg < 32f && sat > 0.2f && sat < 0.55f && v > 0.75f) { skin[k] = true; if (k / w < low) low = k / w; }
+        }
+        if (low >= h) return;
+        int row = low + 2; // linha y cresce para cima: duas acima da parte mais baixa do rosto
+        if (row >= h) return;
+        for (int x = 0; x < w; x++) if (skin[row * w + x]) { minX = Mathf.Min(minX, x); maxX = Mathf.Max(maxX, x); }
+        if (maxX - minX < 3) return;
+        float cx = (minX + maxX) / 2f;
+        var brown = new Color(0.24f, 0.14f, 0.1f, 1f);
+        for (int x = minX; x <= maxX; x++)
+            if (skin[row * w + x] && Mathf.Abs(x - cx) <= 2.5f * w / 48f) px[row * w + x] = brown;
     }
 }
 
