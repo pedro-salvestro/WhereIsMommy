@@ -102,7 +102,7 @@ WhereIsMommy-Unity/
 │   ├── Resources/
 │   │   ├── Art/                   Cenários, criança, mãe, policial e fundos do menu
 │   │   ├── Audio/                 Música do menu e efeitos
-│   │   └── Fonts/                 Press Start 2P
+│   │   └── Fonts/                 Mamae Pixel (derivada da Press Start 2P, OFL)
 │   └── Scripts/
 │       ├── Common.cs              Áudio, sprite direcional e utilitários de UI
 │       ├── Inp.cs                 Entrada de teclado unificada

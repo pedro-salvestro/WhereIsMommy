@@ -744,7 +744,7 @@ public class Outline : MonoBehaviour
 
 public static class UIKit
 {
-    public static Font PixelFont => Resources.Load<Font>("Fonts/PressStart2P-Regular");
+    public static Font PixelFont => Resources.Load<Font>("Fonts/MamaePixel-Regular");
 
     public static Canvas MakeCanvas(string name, int order = 0)
     {
